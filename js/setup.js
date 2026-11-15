@@ -39,6 +39,14 @@ export function mount(container, ctx) {
 
       <section class="setup-panel" id="setup-panel">
         <div class="setup-step" data-step="0">
+          <div class="setup-amp" id="setup-amp">
+            <div class="setup-amp-text">
+              <strong class="setup-amp-title">Recommended: Woodshed Amp</strong>
+              <p class="setup-amp-body">The partner app "Woodshed Amp" is highly recommended. It allows Woodshed to listen to your guitar with ultra-low latency, and lets you hear your own playing with preset or custom sounds.</p>
+              <p class="setup-status" id="setup-amp-status"></p>
+            </div>
+            <a class="btn btn-primary" id="setup-amp-dl" href="downloads/woodshed-amp.zip" download="Woodshed Amp.zip">Download Woodshed Amp</a>
+          </div>
           <p class="setup-body">Plug your guitar into input 1 of your audio interface (on a MOTU M2: input 1, with its gain at about noon). If Woodshed Amp is running, Woodshed uses it automatically.</p>
           <div class="setup-fields">
             <label class="setup-field">
@@ -136,6 +144,21 @@ export function mount(container, ctx) {
       deviceSelect.innerHTML = '<option value="">Default input device</option>';
     }
   }
+
+  const ampBox = container.querySelector('#setup-amp');
+  const ampStatus = container.querySelector('#setup-amp-status');
+  const ampDl = container.querySelector('#setup-amp-dl');
+  function syncAmpBox() {
+    const online = ctx.amp?.state === 'online';
+    ampBox.classList.toggle('is-online', online);
+    ampDl.hidden = online;
+    setStatus(ampStatus, online
+      ? 'Woodshed Amp is running and connected.'
+      : 'Unzip it and run woodshed-amp.exe. This page connects to it by itself and it keeps itself up to date.',
+      online ? 'good' : '');
+  }
+  ctx.amp?.addEventListener('state', syncAmpBox);
+  syncAmpBox();
 
   channelSelect.value = settings.get('inputChannel') || 'mix';
   refreshDevices();
@@ -331,6 +354,7 @@ export function mount(container, ctx) {
 
   return {
     unmount() {
+      ctx.amp?.removeEventListener('state', syncAmpBox);
       if (rafId) {
         cancelAnimationFrame(rafId);
         rafId = null;
