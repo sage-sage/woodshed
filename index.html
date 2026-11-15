@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="woodshed" content="1" />
+  <title>Woodshed</title>
+  <link rel="icon" type="image/svg+xml" href="icons/woodshed.svg" />
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@500;700&family=Space+Grotesk:wght@500;700&display=swap" />
+  <link rel="stylesheet" href="css/style.css" />
+  <link rel="stylesheet" href="css/views.css" />
+  <link rel="stylesheet" href="css/play.css" />
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="left-rail" aria-label="Primary Navigation">
+      <div class="brand-header">
+        <a href="#/library" class="brand-wordmark">
+          <span class="brand-tube-dot" aria-hidden="true"></span>
+          <span>Woodshed</span>
+        </a>
+        <span class="brand-subtitle">Practice Amplifier &middot; Model 1</span>
+      </div>
+
+      <nav class="rail-nav">
+        <a href="#/library" class="rail-link" data-nav="library">
+          <span class="rail-icon" aria-hidden="true"></span>
+          <span>Library</span>
+        </a>
+        <a href="#/import" class="rail-link" data-nav="import">
+          <span class="rail-icon" aria-hidden="true"></span>
+          <span>Add Song</span>
+        </a>
+        <a href="#/tuner" class="rail-link" data-nav="tuner">
+          <span class="rail-icon" aria-hidden="true"></span>
+          <span>Tuner</span>
+        </a>
+        <a href="#/settings" class="rail-link" data-nav="settings">
+          <span class="rail-icon" aria-hidden="true"></span>
+          <span>Settings</span>
+        </a>
+      </nav>
+
+      <div class="rail-input-card card">
+        <div class="rail-input-header">
+          <span class="status-dot" id="rail-input-dot"></span>
+          <span class="rail-input-status" id="rail-input-status">Guitar Offline</span>
+        </div>
+        <div class="meter-track" aria-label="Guitar Input Level">
+          <div class="meter-fill" id="rail-meter-fill"></div>
+        </div>
+        <div class="rail-pitch-readout" id="rail-pitch-readout">&mdash;</div>
+        <button type="button" class="btn btn-primary btn-sm rail-connect-btn" id="rail-connect-btn">
+          Connect Guitar
+        </button>
+      </div>
+      <button type="button" class="btn btn-ghost btn-sm hidden" id="rail-download-btn"
+        title="Woodshed for Windows: the app, Woodshed Amp and the Tab Grabber extension in one zip">
+        Download for Windows
+      </button>
+    </aside>
+
+    <div class="workspace">
+      <header id="song-header-root" class="song-header-bar hidden"></header>
+      <main id="main-view" class="main-view" tabindex="-1"></main>
+    </div>
+  </div>
+
+  <div id="yt-holder" class="yt-hidden-holder" aria-hidden="true">
+    <div id="yt-player-container"></div>
+  </div>
+
+  <div id="toast-region" class="toast-region" aria-live="polite"></div>
+  <div id="modal-root" class="modal-root hidden" role="dialog" aria-modal="true"></div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+</html>

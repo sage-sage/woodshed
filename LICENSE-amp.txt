@@ -1,0 +1,2 @@
+The amp/ folder is free software under the GNU GPL v3 (it uses the Steinberg ASIO SDK under its GPLv3 option).
+https://www.gnu.org/licenses/gpl-3.0.html

@@ -1,0 +1,49 @@
+# Woodshed
+
+A guitar practice game that listens to your real guitar. Import a tab, line it up with a recording
+(a YouTube video or an audio file), and play along while the notes scroll past and get scored.
+
+## Run it
+
+Double-click `start.bat` (needs Python), or run `python -m http.server 8642 --bind 127.0.0.1` in this
+folder and open <http://localhost:8642/>. It has to be `localhost`: browsers only allow audio input there
+(or on https). Use Chrome or Edge.
+
+1. Plug the guitar into your audio interface and click **Connect guitar**. In **Settings** pick the
+   interface and the channel the guitar is on (Input 1 = left, Input 2 = right).
+2. Run **Calibrate** in Settings once so timing is judged fairly for your interface.
+3. Open the built-in demo song, or **Add song**.
+
+## What is in it
+
+- **Play**: scrolling tab highway, hit/miss scoring with timing, streaks and stars; speed 50-125%, bar
+  loops, count-in, metronome, a built-in guitar that can play the tab; *Wait for note* mode that pauses until
+  you play the right thing; three difficulty layers (roots, bass line, full part).
+- **Add song**: paste a text tab, or load Guitar Pro (`.gp3 .gp4 .gp5 .gpx .gp`) / MusicXML files. Audio can
+  be a YouTube link (played through YouTube's own embedded player; nothing is downloaded), an audio file
+  from your computer, a direct audio URL, or none.
+- **Sync**: tap along on the first beat of each bar, or mark the first note and set the tempo, then nudge.
+  "Check it" plays the tab over the recording so you can hear whether they line up.
+- **Learn**: key, scale on the fretboard, the chords with roman numerals and what each one does, the
+  progression, why it works, and drills.
+- **Tuner**: chromatic and per-string, any tuning preset, adjustable A4. While you play, the game also
+  notices when a string is consistently flat or sharp and tells you.
+
+## Good to know
+
+- Text tabs carry no rhythm. Notes are spaced by their position in the bar, so sync those bar by bar.
+  Guitar Pro files have exact rhythm and need only two or three taps.
+- Single notes are judged by pitch. Chords are judged by checking that each chord note's harmonics are
+  present; a note cannot be told apart from an octave or twelfth overtone of another ringing string, so
+  chord checking is deliberately a little forgiving (60% of a big chord's notes).
+- Everything is stored in your browser (IndexedDB). Use Export on a song card to back a song up.
+
+## Development
+
+No build step. `node --test` runs the unit tests (pitch detection across the whole neck at 44.1/48 kHz,
+chord recognition, onsets, tab parsing, Guitar Pro import, sync maths, theory).
+Open `http://localhost:8642/?virtual=1#/song/demo/play` for the self-test: the built-in guitar is fed into
+the detector and should score 95% or better.
+
+Guitar Pro / MusicXML parsing uses [alphaTab](https://alphatab.net) (MPL-2.0), vendored unmodified in
+`vendor/`.

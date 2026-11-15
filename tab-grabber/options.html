@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Woodshed Tab Grabber — Options</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 32px 16px;
+      background: #000;
+      color: #f2f2f2;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      font-size: 14px;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 520px;
+      margin: 0 auto;
+    }
+
+    h1 {
+      margin: 0 0 6px;
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: 0.02em;
+    }
+
+    .subtitle {
+      margin: 0 0 20px;
+      color: #8c8c8c;
+      font-size: 13px;
+    }
+
+    .panel {
+      background: #0c0c0c;
+      border: 1px solid #1f1f1f;
+      border-radius: 6px;
+      padding: 18px;
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .field {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+    }
+
+    label {
+      font-size: 12px;
+      font-weight: 600;
+      color: #f2f2f2;
+    }
+
+    .hint {
+      font-size: 12px;
+      color: #8c8c8c;
+      margin: 0;
+    }
+
+    input[type="url"] {
+      width: 100%;
+      background: #000;
+      color: #f2f2f2;
+      border: 1px solid #1f1f1f;
+      border-radius: 4px;
+      padding: 8px 10px;
+      font-family: inherit;
+      font-size: 13px;
+      outline: none;
+    }
+
+    input[type="url"]:focus {
+      border-color: #8c8c8c;
+    }
+
+    input[type="url"]:disabled {
+      opacity: 0.45;
+    }
+
+    .checkbox-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      cursor: pointer;
+    }
+
+    .actions {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+      padding-top: 4px;
+    }
+
+    .btn {
+      background: #000;
+      color: #f2f2f2;
+      border: 1px solid #1f1f1f;
+      border-radius: 4px;
+      padding: 8px 14px;
+      font-family: inherit;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+
+    .btn:hover {
+      border-color: #8c8c8c;
+    }
+
+    .btn-primary {
+      background: #f2f2f2;
+      color: #000;
+      border-color: #f2f2f2;
+    }
+
+    .btn-primary:hover {
+      background: #ffffff;
+      border-color: #ffffff;
+    }
+
+    #status {
+      font-size: 13px;
+      color: #8c8c8c;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h1>Woodshed Tab Grabber</h1>
+    <p class="subtitle">Configure where grabbed tabs are sent when you click Send to Woodshed.</p>
+
+    <form id="options-form" class="panel">
+      <div class="field">
+        <label for="woodshed-url">Woodshed address</label>
+        <input type="url" id="woodshed-url" placeholder="https://sage-sage.github.io/woodshed/" required />
+        <p class="hint">Default: https://sage-sage.github.io/woodshed/</p>
+      </div>
+
+      <div class="field">
+        <label class="checkbox-row" for="check-hosted">
+          <input type="checkbox" id="check-hosted" />
+          <span>Also check the hosted copy</span>
+        </label>
+        <input type="url" id="hosted-url" placeholder="https://woodshed.example.com/" disabled />
+        <p class="hint">If enabled, open tabs at this URL will also be checked and bridged automatically.</p>
+      </div>
+
+      <div class="actions">
+        <button type="submit" class="btn btn-primary">Save</button>
+        <button type="button" id="reset-btn" class="btn">Reset Default</button>
+        <span id="status" role="status" aria-live="polite"></span>
+      </div>
+    </form>
+  </div>
+
+  <script src="options.js"></script>
+</body>
+</html>

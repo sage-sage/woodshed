@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Woodshed Tab Grabber</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+  <header class="topbar">
+    <span class="brand">WOODSHED TAB GRABBER</span>
+    <div class="topbar-links">
+      <button type="button" id="open-library-btn" class="link-btn" title="Open Tab Library">Open library</button>
+      <button type="button" id="open-options-btn" class="link-btn" title="Extension Settings">Settings</button>
+    </div>
+  </header>
+
+  <main id="app">
+    <section id="loading-view" class="panel center-box">
+      <div class="spinner" aria-hidden="true"></div>
+      <p id="loading-text" class="muted">Scanning page for tab...</p>
+    </section>
+
+    <section id="message-view" class="panel hidden">
+      <div class="msg-header">
+        <span id="msg-site-chip" class="chip hidden"></span>
+      </div>
+      <p id="msg-text" class="msg-body"></p>
+      <div class="actions-row">
+        <button type="button" id="retry-btn" class="btn">Retry</button>
+        <button type="button" id="msg-library-btn" class="btn">Open library</button>
+      </div>
+    </section>
+
+    <section id="result-view" class="panel hidden">
+      <div class="meta-top">
+        <div class="field grow">
+          <label for="title-input">Title</label>
+          <input type="text" id="title-input" class="input" placeholder="Song title" />
+        </div>
+        <div class="field grow">
+          <label for="artist-input">Artist</label>
+          <input type="text" id="artist-input" class="input" placeholder="Artist" />
+        </div>
+      </div>
+
+      <div class="summary-row">
+        <span id="site-chip" class="chip"></span>
+        <span id="summary-text" class="muted summary-line"></span>
+      </div>
+
+      <p id="warning-text" class="warning-line hidden"></p>
+
+      <div class="controls-grid">
+        <div class="field">
+          <label for="tuning-select">Tuning</label>
+          <select id="tuning-select" class="input"></select>
+        </div>
+        <div class="field">
+          <label for="capo-input">Capo</label>
+          <input type="number" id="capo-input" class="input" min="0" max="12" value="0" />
+        </div>
+        <div class="field">
+          <label for="bpm-input">BPM</label>
+          <input type="number" id="bpm-input" class="input" min="30" max="300" placeholder="Auto" />
+        </div>
+      </div>
+
+      <pre id="tab-preview" class="preview-box"></pre>
+
+      <div id="status-banner" class="status-banner hidden"></div>
+
+      <div class="actions-row">
+        <button type="button" id="send-btn" class="btn btn-primary">Send to Woodshed</button>
+        <button type="button" id="save-lib-btn" class="btn">Save to Library</button>
+        <button type="button" id="copy-btn" class="btn">Copy</button>
+        <button type="button" id="save-btn" class="btn">Save .txt</button>
+      </div>
+    </section>
+  </main>
+
+  <script type="module" src="popup.js"></script>
+</body>
+</html>

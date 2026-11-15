@@ -1,0 +1,379 @@
+#include <algorithm>
+#include <array>
+#include <chrono>
+#include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <filesystem>
+#include <random>
+#include <vector>
+
+#include "dsp/biquad.h"
+#include "dsp/builtin_amp.h"
+#include "dsp/cab.h"
+#include "dsp/chain.h"
+#include "dsp/effects.h"
+#include "dsp/oversampler.h"
+#include "presets.h"
+#include "spsc.h"
+#include "wav.h"
+
+namespace {
+
+int gFailures = 0;
+
+#define CHECK(cond)                                                                           \
+    do {                                                                                      \
+        if (!(cond)) {                                                                        \
+            std::fprintf(stderr, "FAIL [%s:%d]: %s\n", __FILE__, __LINE__, #cond);            \
+            ++gFailures;                                                                      \
+        }                                                                                     \
+    } while (0)
+
+constexpr double kPi = 3.14159265358979323846;
+
+float computeRms(const float* buf, int n, int skip = 0) {
+    if (n <= skip) return 0.0f;
+    double sumSq = 0.0;
+    for (int i = skip; i < n; ++i) {
+        const double v = static_cast<double>(buf[i]);
+        sumSq += v * v;
+    }
+    return static_cast<float>(std::sqrt(sumSq / static_cast<double>(n - skip)));
+}
+
+float toDbfs(float lin) {
+    return 20.0f * std::log10(std::max(lin, 1e-12f));
+}
+
+void testBiquadMagnitude() {
+    constexpr double kSampleRate = 48000.0;
+    constexpr std::array<double, 5> kFreqs = {100.0, 400.0, 1000.0, 3000.0, 8000.0};
+
+    struct Case {
+        wsamp::dsp::BiquadType type;
+        double fc;
+        double q;
+        double gainDb;
+    };
+
+    const std::array<Case, 5> cases = {{
+        {wsamp::dsp::BiquadType::LowPass, 1200.0, 0.7071, 0.0},
+        {wsamp::dsp::BiquadType::HighPass, 800.0, 0.8, 0.0},
+        {wsamp::dsp::BiquadType::Peak, 1500.0, 1.5, 6.0},
+        {wsamp::dsp::BiquadType::LowShelf, 300.0, 0.7071, -6.0},
+        {wsamp::dsp::BiquadType::HighShelf, 4000.0, 0.7071, 5.0},
+    }};
+
+    constexpr int kNumSamples = 16384;
+    constexpr int kSettle = 4096;
+    std::vector<float> buf(kNumSamples);
+
+    for (const auto& c : cases) {
+        wsamp::dsp::Biquad bq;
+        bq.prepare(kSampleRate, 64);
+        bq.configure(c.type, c.fc, c.q, c.gainDb);
+
+        for (double f : kFreqs) {
+            bq.reset();
+            for (int i = 0; i < kNumSamples; ++i) {
+                buf[i] = static_cast<float>(std::sin(2.0 * kPi * f * static_cast<double>(i) / kSampleRate));
+            }
+            bq.processBlock(buf.data(), kNumSamples);
+
+            const float measuredRms = computeRms(buf.data(), kNumSamples, kSettle);
+            const double measuredDb = 20.0 * std::log10(std::max<double>(measuredRms * std::sqrt(2.0), 1e-12));
+            const double expectedDb = bq.magnitudeDbAt(f);
+            CHECK(std::abs(measuredDb - expectedDb) < 0.3);
+        }
+    }
+}
+
+void testOversamplerAndAliasing() {
+    constexpr double kSampleRate = 48000.0;
+    constexpr int kNumSamples = 8192;
+    constexpr int kBlock = 64;
+
+    // 1. 1 kHz sine up+down returns within 0.1 dB
+    wsamp::dsp::Oversampler4x os;
+    os.prepare(kSampleRate, kBlock);
+    CHECK(os.latencySamplesExact() < 48.0f); // < 1 ms at 48 kHz
+
+    std::vector<float> orig(kNumSamples);
+    std::vector<float> proc(kNumSamples);
+    for (int i = 0; i < kNumSamples; ++i) {
+        orig[i] = 0.5f * static_cast<float>(std::sin(2.0 * kPi * 1000.0 * static_cast<double>(i) / kSampleRate));
+        proc[i] = orig[i];
+    }
+
+    for (int off = 0; off < kNumSamples; off += kBlock) {
+        os.upsample(proc.data() + off, kBlock);
+        os.downsample(proc.data() + off, kBlock);
+    }
+
+    const float inRms = computeRms(orig.data(), kNumSamples, 512);
+    const float outRms = computeRms(proc.data(), kNumSamples, 512);
+    const float diffDb = std::abs(toDbfs(outRms) - toDbfs(inRms));
+    CHECK(diffDb < 0.1f);
+
+    // 2. Aliasing test: 15 kHz sine through Crunch drive at 48 kHz;
+    // energy below 10 kHz must be < -40 dB relative to the output.
+    wsamp::dsp::BuiltinAmp crunchAmp;
+    crunchAmp.prepare(kSampleRate, kBlock);
+    wsamp::dsp::AmpParams ap;
+    ap.character = wsamp::dsp::AmpCharacter::Crunch;
+    ap.gain = 6.0f;
+    ap.tightHz = 40.0f;
+    crunchAmp.setParams(ap);
+
+    constexpr int kAliasLen = 16384;
+    std::vector<float> tone15k(kAliasLen);
+    for (int i = 0; i < kAliasLen; ++i) {
+        tone15k[i] = 0.5f * static_cast<float>(std::sin(2.0 * kPi * 15000.0 * static_cast<double>(i) / kSampleRate));
+    }
+
+    for (int off = 0; off < kAliasLen; off += kBlock) {
+        crunchAmp.process(tone15k.data() + off, kBlock);
+    }
+
+    // Measure low-band (< 10 kHz) energy via 4 cascaded RBJ lowpass filters at 9.5 kHz
+    std::vector<float> lowBand(tone15k.begin() + 2048, tone15k.end());
+    for (int stage = 0; stage < 4; ++stage) {
+        wsamp::dsp::Biquad lp;
+        lp.prepare(kSampleRate, kBlock);
+        lp.configure(wsamp::dsp::BiquadType::LowPass, 9500.0, 0.7071, 0.0);
+        lp.processBlock(lowBand.data(), static_cast<int>(lowBand.size()));
+    }
+
+    const float totalRms = computeRms(tone15k.data(), kAliasLen, 2048);
+    const float sub10kRms = computeRms(lowBand.data(), static_cast<int>(lowBand.size()), 1024);
+    const float relDb = toDbfs(sub10kRms) - toDbfs(totalRms);
+    CHECK(relDb < -40.0f);
+}
+
+void testAllPresets() {
+    constexpr double kSampleRate = 48000.0;
+    constexpr int kBlock = 64;
+    wsamp::PresetBank bank;
+
+    std::mt19937 rng(42);
+    std::uniform_real_distribution<float> dist(-1.0f, 1.0f);
+
+    for (const auto& preset : bank.presets()) {
+        wsamp::dsp::Chain chain;
+        chain.prepare(kSampleRate, kBlock);
+        chain.setParams(preset.params);
+        chain.snapParameters();
+
+        // 1. Silence in -> silence out (< -100 dBFS after gate)
+        std::vector<float> silence(4800, 0.0f);
+        for (int off = 0; off < 4800; off += kBlock) {
+            chain.process(silence.data() + off, kBlock);
+        }
+        const float silRms = computeRms(silence.data(), 4800, 640);
+        CHECK(toDbfs(silRms) < -100.0f);
+
+        // 2. -18 dBFS RMS 110 Hz tone -> output RMS within -18 +- 4 dBFS
+        chain.reset();
+        constexpr int kToneLen = 24000; // 0.5 s
+        const float peak18 = std::pow(10.0f, -18.0f / 20.0f) * std::sqrt(2.0f);
+        std::vector<float> tone(kToneLen);
+        for (int i = 0; i < kToneLen; ++i) {
+            tone[i] = peak18 * static_cast<float>(std::sin(2.0 * kPi * 110.0 * static_cast<double>(i) / kSampleRate));
+        }
+        for (int off = 0; off < kToneLen; off += kBlock) {
+            chain.process(tone.data() + off, kBlock);
+        }
+        const float outRmsDb = toDbfs(computeRms(tone.data(), kToneLen, 4800));
+        CHECK(outRmsDb >= -22.0f && outRmsDb <= -14.0f);
+
+        // 3. Full-scale noise -> no NaN/Inf and never exceeds 0 dBFS
+        chain.reset();
+        std::vector<float> noise(8192);
+        for (float& s : noise) s = dist(rng);
+        for (int off = 0; off < 8192; off += kBlock) {
+            chain.process(noise.data() + off, kBlock);
+        }
+        for (float s : noise) {
+            CHECK(std::isfinite(s));
+            CHECK(std::abs(s) <= 1.0f);
+        }
+    }
+}
+
+void testIrConvolver() {
+    std::mt19937 rng(12345);
+    std::uniform_real_distribution<float> dist(-0.5f, 0.5f);
+
+    constexpr int kIrLen = 257;
+    constexpr int kSigLen = 2048;
+
+    std::vector<float> ir(kIrLen);
+    std::vector<float> sig(kSigLen);
+    for (float& h : ir) h = dist(rng);
+    for (float& x : sig) x = dist(rng);
+
+    // Naive direct convolution
+    std::vector<float> expected(kSigLen, 0.0f);
+    for (int n = 0; n < kSigLen; ++n) {
+        double acc = 0.0;
+        for (int k = 0; k < kIrLen; ++k) {
+            if (n - k >= 0) {
+                acc += static_cast<double>(ir[k]) * static_cast<double>(sig[n - k]);
+            }
+        }
+        expected[n] = static_cast<float>(acc);
+    }
+
+    wsamp::dsp::IrConvolver conv;
+    conv.prepare(48000.0, 64);
+    conv.loadIr(ir, /*applyFadeAndNormalize=*/false);
+
+    std::vector<float> actual = sig;
+    for (int off = 0; off < kSigLen; off += 64) {
+        conv.process(actual.data() + off, 64);
+    }
+
+    float maxErr = 0.0f;
+    for (int n = 0; n < kSigLen; ++n) {
+        maxErr = std::max(maxErr, std::abs(actual[n] - expected[n]));
+    }
+    CHECK(maxErr < 1e-5f);
+}
+
+void testNoiseGate() {
+    constexpr double kSampleRate = 48000.0;
+    wsamp::dsp::NoiseGate gate;
+    gate.prepare(kSampleRate, 64);
+    gate.setThresholdDb(-45.0f);
+
+    // 50 ms silence, 10 ms pluck (-20 dBFS), 250 ms silence
+    const int preSil = static_cast<int>(0.050 * kSampleRate);
+    const int pluckLen = static_cast<int>(0.010 * kSampleRate);
+    const int postSil = static_cast<int>(0.250 * kSampleRate);
+
+    std::vector<float> sig(preSil + pluckLen + postSil, 0.0f);
+    for (int i = 0; i < pluckLen; ++i) {
+        sig[preSil + i] = 0.1f * static_cast<float>(std::sin(2.0 * kPi * 440.0 * static_cast<double>(i) / kSampleRate));
+    }
+
+    gate.process(sig.data(), static_cast<int>(sig.size()));
+
+    // Check gate opens within 2 ms (96 samples at 48 kHz) of pluck onset
+    const int twoMs = static_cast<int>(0.002 * kSampleRate);
+    float peakAfter2Ms = 0.0f;
+    for (int i = twoMs; i < pluckLen; ++i) {
+        peakAfter2Ms = std::max(peakAfter2Ms, std::abs(sig[preSil + i]));
+    }
+    CHECK(peakAfter2Ms > 0.07f);
+
+    // Check gate stays open during 40 ms hold (first 20 ms of post-pluck with tiny residual signal above close threshold)
+    // and closes after hold (40 ms) + release (80 ms) -> check tail at 220 ms after pluck
+    const int tailStart = preSil + pluckLen + static_cast<int>(0.220 * kSampleRate);
+    float maxTail = 0.0f;
+    for (int i = tailStart; i < static_cast<int>(sig.size()); ++i) {
+        maxTail = std::max(maxTail, std::abs(sig[i]));
+    }
+    CHECK(maxTail < 1e-4f);
+}
+
+void testRealtimeBudget() {
+    constexpr double kSampleRate = 48000.0;
+    constexpr int kBlock = 64;
+    constexpr int kTotalSamples = 480000; // 10 seconds
+
+    wsamp::PresetBank bank;
+    const wsamp::Preset* metal = bank.findById("metal");
+    CHECK(metal != nullptr);
+    if (!metal) return;
+
+    wsamp::dsp::Chain chain;
+    chain.prepare(kSampleRate, kBlock);
+    chain.setParams(metal->params);
+    chain.snapParameters();
+
+    std::vector<float> audio(kTotalSamples);
+    for (int i = 0; i < kTotalSamples; ++i) {
+        audio[i] = 0.15f * static_cast<float>(std::sin(2.0 * kPi * 110.0 * static_cast<double>(i) / kSampleRate));
+    }
+
+    const auto t0 = std::chrono::steady_clock::now();
+    for (int off = 0; off < kTotalSamples; off += kBlock) {
+        chain.process(audio.data() + off, kBlock);
+    }
+    const auto t1 = std::chrono::steady_clock::now();
+
+    const double elapsedMs = std::chrono::duration<double, std::milli>(t1 - t0).count();
+    const double rtf = 10000.0 / std::max(elapsedMs, 1e-6);
+    std::printf("Metal 10s @ 48kHz: %.2f ms (RTF = %.1fx)\n", elapsedMs, rtf);
+    CHECK(elapsedMs < 250.0);
+    CHECK(rtf > 40.0);
+}
+
+void testSpscAndPresetsAndWav() {
+    wsamp::SpscRing<int, 16> ring;
+    for (int i = 0; i < 16; ++i) {
+        CHECK(ring.tryPush(i * 10));
+    }
+    CHECK(!ring.tryPush(999));
+    for (int i = 0; i < 16; ++i) {
+        int v = -1;
+        CHECK(ring.tryPop(v));
+        CHECK(v == i * 10);
+    }
+    int emptyVal = 0;
+    CHECK(!ring.tryPop(emptyVal));
+
+    // Preset JSON atomic save + reload
+    const std::filesystem::path tmpJson = std::filesystem::temp_directory_path() / "wsamp_test_presets.json";
+    std::string err;
+    wsamp::PresetBank bank;
+    auto* crunch = bank.findByIdMutable("crunch");
+    CHECK(crunch != nullptr);
+    crunch->params.amp.gain = 7.25f;
+    crunch->params.namIncludesCab = true;
+    CHECK(bank.saveOverridesAtomic(tmpJson, err));
+
+    wsamp::PresetBank reloaded;
+    CHECK(reloaded.loadOverrides(tmpJson, err));
+    const auto* crunchReloaded = reloaded.findById("crunch");
+    CHECK(crunchReloaded != nullptr);
+    CHECK(std::abs(crunchReloaded->params.amp.gain - 7.25f) < 1e-4f);
+    CHECK(crunchReloaded->params.namIncludesCab == true);
+    std::error_code ec;
+    std::filesystem::remove(tmpJson, ec);
+
+    // WAV write + read + resample
+    const std::filesystem::path tmpWav = std::filesystem::temp_directory_path() / "wsamp_test_tone.wav";
+    std::vector<float> src(4410);
+    for (int i = 0; i < 4410; ++i) {
+        src[i] = 0.25f * static_cast<float>(std::sin(2.0 * kPi * 440.0 * static_cast<double>(i) / 44100.0));
+    }
+    CHECK(wsamp::writeWavFloat32(tmpWav, src, 44100, 1, err));
+    wsamp::WavData rd;
+    CHECK(wsamp::readWavMono(tmpWav, rd, err));
+    CHECK(rd.sampleRate == 44100);
+    CHECK(rd.samples.size() == src.size());
+    auto resampled = wsamp::resampleWindowedSinc(rd.samples, 44100, 48000);
+    CHECK(resampled.size() == 4800);
+    std::filesystem::remove(tmpWav, ec);
+}
+
+} // namespace
+
+int main() {
+    testBiquadMagnitude();
+    testOversamplerAndAliasing();
+    testAllPresets();
+    testIrConvolver();
+    testNoiseGate();
+    testRealtimeBudget();
+    testSpscAndPresetsAndWav();
+
+    if (gFailures == 0) {
+        std::printf("All DSP tests passed.\n");
+    } else {
+        std::fprintf(stderr, "%d test check(s) failed.\n", gFailures);
+    }
+    return gFailures;
+}

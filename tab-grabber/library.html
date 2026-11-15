@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Tab Library — Woodshed Tab Grabber</title>
+  <link rel="stylesheet" href="library.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="title-group">
+      <h1>Tab Library</h1>
+      <span id="count-badge" class="chip">0 tabs</span>
+    </div>
+    <div class="toolbar">
+      <input type="search" id="search-input" class="input search-input" placeholder="Search title, artist, site, or tags…" />
+      <label class="sort-wrap">
+        <span class="muted">Sort</span>
+        <select id="sort-select" class="input">
+          <option value="newest">Newest</option>
+          <option value="title">Title</option>
+          <option value="artist">Artist</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <main class="workspace">
+    <section class="list-pane" aria-label="Saved tabs">
+      <div id="entry-list" class="entry-list"></div>
+      <p id="empty-list-msg" class="empty-state hidden">No saved tabs match your filter.</p>
+    </section>
+
+    <section class="preview-pane" aria-label="Tab details and preview">
+      <div id="no-selection" class="empty-state">Select a tab from the list to view or edit it.</div>
+
+      <div id="detail-view" class="detail-view hidden">
+        <div class="detail-meta-grid">
+          <div class="field">
+            <label for="detail-title">Title</label>
+            <input type="text" id="detail-title" class="input" placeholder="Song title" />
+          </div>
+          <div class="field">
+            <label for="detail-artist">Artist</label>
+            <input type="text" id="detail-artist" class="input" placeholder="Artist" />
+          </div>
+          <div class="field">
+            <label for="detail-tags">Tags (comma-separated)</label>
+            <input type="text" id="detail-tags" class="input" placeholder="e.g. fingerstyle, practice, rock" />
+          </div>
+          <div class="field">
+            <label for="detail-note">Note</label>
+            <textarea id="detail-note" class="input note-input" rows="2" placeholder="Personal practice notes…"></textarea>
+          </div>
+        </div>
+
+        <div class="detail-subbar">
+          <div id="detail-badges" class="badges-row"></div>
+          <span id="save-indicator" class="muted save-indicator"></span>
+        </div>
+
+        <div class="detail-actions">
+          <button type="button" id="detail-send-btn" class="btn btn-primary">Send to Woodshed</button>
+          <button type="button" id="detail-source-btn" class="btn">Open source page</button>
+          <button type="button" id="detail-copy-btn" class="btn">Copy text</button>
+          <button type="button" id="detail-delete-btn" class="btn btn-danger">Delete</button>
+        </div>
+
+        <pre id="detail-text" class="tab-view"></pre>
+      </div>
+    </section>
+  </main>
+
+  <footer class="footer">
+    <div class="footer-actions">
+      <button type="button" id="export-btn" class="btn">Export library</button>
+      <button type="button" id="import-btn" class="btn">Import</button>
+      <input type="file" id="import-file" accept=".json,application/json" class="hidden" />
+    </div>
+    <span id="footer-status" class="muted"></span>
+  </footer>
+
+  <script type="module" src="library.js"></script>
+</body>
+</html>
