@@ -5,9 +5,8 @@ A guitar practice game that listens to your real guitar. Import a tab, line it u
 
 ## Run it
 
-Double-click `start.bat` (needs Python), or run `python -m http.server 8642 --bind 127.0.0.1` in this
-folder and open <http://localhost:8642/>. It has to be `localhost`: browsers only allow audio input there
-(or on https). Use Chrome or Edge.
+Open <https://sage-sage.github.io/woodshed/> in Chrome or Edge. Nothing to install.
+For the lowest latency and amp tones, also run **Woodshed Amp** (Settings → Downloads).
 
 1. Plug the guitar into your audio interface and click **Connect guitar**. In **Settings** pick the
    interface and the channel the guitar is on (Input 1 = left, Input 2 = right).
@@ -36,13 +35,13 @@ folder and open <http://localhost:8642/>. It has to be `localhost`: browsers onl
 - Single notes are judged by pitch. Chords are judged by checking that each chord note's harmonics are
   present; a note cannot be told apart from an octave or twelfth overtone of another ringing string, so
   chord checking is deliberately a little forgiving (60% of a big chord's notes).
-- Everything is stored in your browser (IndexedDB). Use Export on a song card to back a song up.
+- Everything is stored in your browser (IndexedDB). Use **Back Up All** in Settings to keep a copy.
 
 ## Development
 
-No build step. `node --test` runs the unit tests (pitch detection across the whole neck at 44.1/48 kHz,
+No build step; `npm start` serves it locally for development. `node --test` runs the unit tests (pitch detection across the whole neck at 44.1/48 kHz,
 chord recognition, onsets, tab parsing, Guitar Pro import, sync maths, theory).
-Open `http://localhost:8642/?virtual=1#/song/demo/play` for the self-test: the built-in guitar is fed into
+Add `?virtual=1#/song/demo/play` to the address for the self-test: the built-in guitar is fed into
 the detector and should score 95% or better.
 
 Guitar Pro / MusicXML parsing uses [alphaTab](https://alphatab.net) (MPL-2.0), vendored unmodified in

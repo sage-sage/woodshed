@@ -17,7 +17,7 @@ popup.html, popup.css, popup.js        the UI (black, simple: matches Woodshed: 
 extract.js                             injected with chrome.scripting.executeScript({files:['extract.js']}) into the
                                        active tab; defines globalThis.__woodshedExtract() and returns its result
 lib/clean.js                           PURE text functions (ES module, no DOM): used by popup.js and the tests
-options.html, options.js               Woodshed address (default http://localhost:8642/), "also check the hosted copy"
+options.html, options.js               Woodshed address (default https://sage-sage.github.io/woodshed/), "also check the hosted copy"
 bridge.js                              content script for the Woodshed pages (below)
 icons/16.png 32.png 48.png 128.png     (I will generate these; reference them in the manifest)
 tests/clean.test.mjs                   node --test, fixtures inline as strings

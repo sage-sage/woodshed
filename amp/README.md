@@ -9,7 +9,7 @@ and the website picks a tone for each song.
 1. Plug in the MOTU M2, guitar into input 1, headphones or monitors on the M2.
 2. Run `build\woodshed-amp.exe`. A red jewel icon appears in the notification area (right-click it for presets,
    input 1/2, bypass, mute, the ASIO control panel and "Start with Windows").
-3. Open Woodshed at `http://localhost:8642/` (`start.bat` in the woodshed folder). It connects by itself;
+3. Open Woodshed at <https://sage-sage.github.io/woodshed/> (or "Open Woodshed" in the tray menu). It connects by itself;
    **Settings → Woodshed Amp** shows the latency and lets you change the presets and load captures.
 4. Set the buffer in the MOTU's ASIO control panel: 64 samples at 48 kHz gives about 5 ms round trip.
 
@@ -36,8 +36,8 @@ the paths are remembered in `%APPDATA%\WoodshedAmp\presets.json`.
 
 ## Privacy
 
-The app listens only on `127.0.0.1:47800` and only accepts connections from Woodshed pages (localhost and claude.ai
-artifact origins). Other websites cannot connect, so they cannot hear your guitar. Extra origins can be added one per
+The app listens only on `127.0.0.1:47800` and only accepts connections from Woodshed pages (the GitHub Pages site,
+localhost for development, and claude.ai artifact origins). Other websites cannot connect, so they cannot hear your guitar. Extra origins can be added one per
 line in `%APPDATA%\WoodshedAmp\origins.txt`.
 
 ## Build

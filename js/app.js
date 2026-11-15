@@ -235,42 +235,6 @@ function updateRailStatus() {
   }
 }
 
-// ---- Download the local version (only offered on the hosted copy, which cannot use a guitar input) ----
-const IS_HOSTED = /(^|\.)claudeusercontent\.com$|(^|\.)claude\.ai$/.test(location.hostname);
-
-async function downloadLocalVersion() {
-  const btn = document.getElementById('rail-download-btn');
-  const label = btn ? btn.textContent : '';
-  try {
-    const downloads = globalThis.claude && typeof globalThis.claude.use === 'function'
-      ? await globalThis.claude.use('downloads') : null;
-    if (!downloads) {
-      toast('Downloads are not available in this view. Open the artifact in claude.ai and try again.', 'error');
-      return;
-    }
-    if (btn) btn.disabled = true;
-    const { buildLocalZip } = await import('./local-download.js');
-    const { zip, filename } = await buildLocalZip((done, total) => {
-      if (btn) btn.textContent = `Preparing ${Math.round((done / total) * 100)}%`;
-    });
-    await downloads.save({ filename, data: new Blob([zip]) });
-    toast('Saved. Unzip it and double-click "Start Woodshed.cmd" (see README.txt).', 'success');
-  } catch (err) {
-    if (err && err.code === 'declined') return;
-    toast(err && err.message ? err.message : 'The download did not start.', 'error');
-  } finally {
-    if (btn) { btn.disabled = false; btn.textContent = label; }
-  }
-}
-
-if (IS_HOSTED) {
-  const dl = document.getElementById('rail-download-btn');
-  if (dl) {
-    dl.classList.remove('hidden');
-    dl.addEventListener('click', downloadLocalVersion);
-  }
-}
-
 document.getElementById('rail-connect-btn')?.addEventListener('click', async () => {
   try {
     await resumeAudio();
@@ -564,12 +528,6 @@ function mountLibrary(container) {
     const section = container.querySelector('#saved-tabs-section');
     if (!section) return;
 
-    if (savedTabsState === 'unavailable' && IS_HOSTED) {
-      section.replaceChildren();
-      section.classList.add('hidden');
-      return;
-    }
-
     section.classList.remove('hidden');
     section.replaceChildren();
 
@@ -820,16 +778,8 @@ function confirmDeleteModal(id, title, onDeleted) {
   });
 }
 
-// Settings > Downloads. Locally the zips come from downloads/ (built by tools/package.py). The hosted copy can't serve
-// program files, so there the amp points to the full download and the extension is zipped in the browser.
+// Settings > Downloads: the zips come from downloads/ (built by tools/package.py).
 async function saveFile(blob, filename) {
-  if (IS_HOSTED) {
-    const downloads = globalThis.claude && typeof globalThis.claude.use === 'function'
-      ? await globalThis.claude.use('downloads') : null;
-    if (!downloads) throw new Error('Downloads are not available in this view.');
-    await downloads.save({ filename, data: blob });
-    return;
-  }
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
@@ -838,48 +788,6 @@ async function saveFile(blob, filename) {
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
-}
-
-function wireDownloads(container) {
-  const amp = container.querySelector('#dl-amp');
-  const ext = container.querySelector('#dl-ext');
-  const note = (id, text) => { const el = container.querySelector(id); if (el) el.textContent = text; };
-  const disable = (a) => { a.removeAttribute('href'); a.setAttribute('aria-disabled', 'true'); a.classList.add('is-disabled'); };
-  if (!amp || !ext) return;
-  if (IS_HOSTED) {
-    disable(amp);
-    note('#dl-amp-note', 'Program files can’t be offered from this hosted page. Use "Download for Windows" (bottom left): the full download includes the amp.');
-    ext.removeAttribute('href');
-    ext.addEventListener('click', async (e) => {
-      e.preventDefault();
-      if (ext.getAttribute('aria-busy') === 'true') return;
-      const label = ext.textContent;
-      try {
-        const downloads = globalThis.claude && typeof globalThis.claude.use === 'function'
-          ? await globalThis.claude.use('downloads') : null;
-        if (!downloads) { toast('Downloads are not available in this view.', 'error'); return; }
-        ext.setAttribute('aria-busy', 'true');
-        const { buildExtensionZip } = await import('./local-download.js');
-        const { zip, filename } = await buildExtensionZip((d, t) => { ext.textContent = `Preparing ${Math.round((d / t) * 100)}%`; });
-        await downloads.save({ filename, data: new Blob([zip]) });
-        toast('Saved. Unzip it, then Load unpacked in chrome://extensions.', 'success');
-      } catch (err) {
-        if (!(err && err.code === 'declined')) toast(err && err.message ? err.message : 'The download did not start.', 'error');
-      } finally {
-        ext.removeAttribute('aria-busy');
-        ext.textContent = label;
-      }
-    });
-    return;
-  }
-  // Local: check the zips exist (a copy unzipped from "Woodshed for Windows" already has both as folders).
-  for (const [a, id, folder] of [[amp, '#dl-amp-note', 'Woodshed Amp'], [ext, '#dl-ext-note', 'Woodshed Tab Grabber']]) {
-    fetch(a.getAttribute('href'), { method: 'HEAD', cache: 'no-cache' }).then((r) => {
-      if (r.ok) return;
-      disable(a);
-      note(id, `Not on this copy. If you unzipped "Woodshed for Windows", it is the "${folder}" folder next to "app".`);
-    }).catch(() => {});
-  }
 }
 
 // Built-in Settings View (with 8-click Latency Calibrator)
@@ -1043,14 +951,14 @@ function mountSettings(container) {
             <div class="dl-head"><strong>Woodshed Amp</strong><span class="chip">Windows</span></div>
             <p class="dl-desc">Plays your guitar through amp tones with almost no delay over ASIO (your MOTU M2) and feeds Woodshed for scoring. Unzip it and run <code>woodshed-amp.exe</code>.</p>
             <a class="btn btn-primary" id="dl-amp" href="downloads/woodshed-amp.zip" download="Woodshed Amp.zip">Download Amp</a>
-            <p class="dl-note" id="dl-amp-note"></p>
+            
             <p class="dl-version" id="dl-amp-ver"></p>
           </div>
           <div class="dl-item">
             <div class="dl-head"><strong>Tab Grabber</strong><span class="chip">Chrome extension</span></div>
             <p class="dl-desc">Saves tabs from Songsterr, Ultimate Guitar and other tab sites into your library. Unzip it, open <code>chrome://extensions</code>, turn on Developer mode, click Load unpacked and pick the unzipped folder.</p>
             <a class="btn btn-primary" id="dl-ext" href="downloads/woodshed-tab-grabber.zip" download="Woodshed Tab Grabber.zip">Download Extension</a>
-            <p class="dl-note" id="dl-ext-note"></p>
+            
             <p class="dl-version" id="dl-ext-ver"></p>
           </div>
         </div>
@@ -1072,7 +980,6 @@ function mountSettings(container) {
     </div>
   `;
 
-  wireDownloads(container);
   const stopVersions = showVersions(container);
 
   const renderBackupStatus = () => {

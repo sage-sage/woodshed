@@ -315,7 +315,7 @@ export class GuitarInput extends EventTarget {
       const pol = globalThis.document && (document.permissionsPolicy || document.featurePolicy);
       const blocked = pol && typeof pol.allowsFeature === 'function' && !pol.allowsFeature('microphone');
       if (blocked) {
-        return this._emitError('This hosted copy of Woodshed is not allowed to use a microphone or audio interface (the page it is embedded in blocks it). To play with your guitar, use “Download for Windows” (bottom left) and run Woodshed from your computer.', err);
+        return this._emitError('This page is embedded somewhere that blocks microphone and audio-interface access. Open Woodshed directly at https://sage-sage.github.io/woodshed/ to play with your guitar.', err);
       }
       return this._emitError('Permission denied for audio input. Grant microphone access in your browser settings.', err);
     }

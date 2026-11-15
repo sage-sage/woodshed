@@ -1,12 +1,12 @@
 {
  "site": {
-  "updated": "2026-11-15T15:45:22-08:00"
+  "updated": "2026-11-15T15:53:52-08:00"
  },
  "amp": {
   "version": "1.3.0",
   "url": "https://github.com/sage-sage/woodshed/releases/download/amp-v1.3.0/woodshed-amp.exe",
   "sha256": "503e42c9e3b3d94942dfc68cd2192e6ac436273a02867d619be7130463f178eb",
-  "notes": "Setup recommends Woodshed Amp; menu fixes and layout improvements"
+  "notes": "Remove local-hosting launchers and the Download for Windows bundle; the site lives on GitHub Pages"
  },
  "extension": {
   "version": "1.2.0",
