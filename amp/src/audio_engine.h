@@ -3,6 +3,7 @@
 #include <atomic>
 #include <cstdint>
 #include <mutex>
+#include <span>
 #include <string>
 #include <utility>
 #include <vector>
@@ -39,6 +40,10 @@ struct AudioStatus {
     double monitorLatencyMs = 0.0;
     uint32_t monitorUnderruns = 0;
     std::string monitorError;
+    bool guideActive = false;
+    float guideBufferedMs = 0.0f;
+    uint32_t guideUnderruns = 0;
+    double guideLatencyMs = 30.0;
 };
 
 class AudioEngine {
@@ -46,6 +51,9 @@ public:
     static constexpr int kMaxBlock = 4096;
     static constexpr size_t kDryRingCapacity = 32768;
     static constexpr size_t kMonitorRingCapacity = 16384;
+    static constexpr size_t kGuideRingCapacity = 131072; // >1 s at 96 kHz (power of two)
+    static constexpr double kGuideTargetMs = 30.0;
+    static constexpr double kGuideMaxExcessMs = 120.0;
 
     AudioEngine();
     ~AudioEngine();
@@ -97,6 +105,13 @@ public:
     size_t drainDrySamples(int16_t* out, size_t maxSamples) noexcept {
         return dryRing_.popBatch(out, maxSamples);
     }
+
+    // Guide guitar stream controls & lock-free single-producer input (called from WsServer thread).
+    void setGuideActive(bool active, uint32_t sampleRate = 48000) noexcept;
+    bool isGuideActive() const noexcept { return guideActive_.load(std::memory_order_acquire); }
+    void setGuideGain(float gain) noexcept;
+    float guideGain() const noexcept { return guideGain_.load(std::memory_order_relaxed); }
+    void pushGuide(std::span<const int16_t> samples, uint32_t sampleRate) noexcept;
 
     // Snapshot of telemetry & resets interval peak/clip trackers.
     AudioStatus getStatus();
@@ -185,6 +200,24 @@ private:
     bool monPrimed_ = false;
     bool monAvgFillInit_ = false;
     SpscRing<float, kMonitorRingCapacity> monitorRing_;
+
+    void fillGuideChunk(int chunk) noexcept;
+
+    std::atomic<bool> guideActive_{false};
+    std::atomic<uint32_t> guideSampleRate_{48000};
+    std::atomic<float> guideGain_{1.0f};
+    std::atomic<uint32_t> guideFlushSeq_{0};
+    std::atomic<float> guideBufferedMs_{0.0f};
+    std::atomic<uint32_t> guideUnderruns_{0};
+
+    uint32_t seenGuideFlushSeq_ = 0;
+    bool guidePrimed_ = false;
+    bool guideHasPrev_ = false;
+    double guideResamplerPos_ = 0.0;
+    float guideS0_ = 0.0f;
+    float guideS1_ = 0.0f;
+    std::vector<float> guideBuf_;
+    SpscRing<float, kGuideRingCapacity> guideRing_;
 };
 
 } // namespace wsamp

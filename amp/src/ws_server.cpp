@@ -412,6 +412,48 @@ std::vector<uint8_t> buildWsa1Frame(uint32_t sampleRate,
     return out;
 }
 
+bool parseWsa1Frame(std::span<const uint8_t> payload,
+                    uint32_t& sampleRate,
+                    uint32_t& frameIndex,
+                    std::vector<int16_t>& samples) {
+    samples.clear();
+    if (payload.size() < 16) {
+        return false;
+    }
+    if (payload[0] != 'W' || payload[1] != 'S' || payload[2] != 'A' || payload[3] != '1') {
+        return false;
+    }
+
+    auto readU32 = [&](size_t off) -> uint32_t {
+        return static_cast<uint32_t>(payload[off + 0]) |
+               (static_cast<uint32_t>(payload[off + 1]) << 8) |
+               (static_cast<uint32_t>(payload[off + 2]) << 16) |
+               (static_cast<uint32_t>(payload[off + 3]) << 24);
+    };
+
+    const uint32_t sr = readU32(4);
+    const uint32_t idx = readU32(8);
+    const uint32_t count = readU32(12);
+
+    if (count > 8192u) {
+        return false;
+    }
+    if (static_cast<size_t>(count) * 2u > payload.size() - 16u) {
+        return false;
+    }
+
+    sampleRate = sr;
+    frameIndex = idx;
+    samples.resize(count);
+    for (uint32_t i = 0; i < count; ++i) {
+        const size_t off = 16u + static_cast<size_t>(i) * 2u;
+        const uint16_t u = static_cast<uint16_t>(payload[off + 0]) |
+                           (static_cast<uint16_t>(payload[off + 1]) << 8);
+        samples[i] = static_cast<int16_t>(u);
+    }
+    return true;
+}
+
 // ============================================================================
 // WsServer
 // ============================================================================
@@ -714,6 +756,8 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
                     const std::string_view txt(
                         reinterpret_cast<const char*>(frame.payload.data()), frame.payload.size());
                     handler_.onClientTextMessage(c.id, txt);
+                } else if (frame.opcode == WsOpcode::Binary) {
+                    handler_.onClientBinaryMessage(c.id, frame.payload);
                 }
             } else {
                 c.assemblingFragment = true;
@@ -740,6 +784,8 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
                     const std::string_view txt(
                         reinterpret_cast<const char*>(c.fragmentBuf.data()), c.fragmentBuf.size());
                     handler_.onClientTextMessage(c.id, txt);
+                } else if (c.fragmentOpcode == WsOpcode::Binary) {
+                    handler_.onClientBinaryMessage(c.id, c.fragmentBuf);
                 }
                 c.fragmentBuf.clear();
             }

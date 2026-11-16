@@ -214,7 +214,34 @@ void testWsa1AudioFrameLayout() {
 
 } // namespace
 
+// Guide audio from the page: parse what buildWsa1Frame makes, reject malformed payloads.
+void testWsa1Parse() {
+    std::vector<int16_t> in = {0, 1, -1, 32767, -32768, 1234, -4321};
+    const std::vector<uint8_t> frame = wsamp::buildWsa1Frame(48000, 77, in);
+    uint32_t rate = 0, idx = 0;
+    std::vector<int16_t> out;
+    CHECK(wsamp::parseWsa1Frame(frame, rate, idx, out));
+    CHECK(rate == 48000);
+    CHECK(idx == 77);
+    CHECK(out == in);
+
+    std::vector<uint8_t> badMagic = frame;
+    badMagic[0] = 'X';
+    CHECK(!wsamp::parseWsa1Frame(badMagic, rate, idx, out));
+
+    std::vector<uint8_t> shortPayload(frame.begin(), frame.end() - 2);   // count says 7 samples, 6.5 present
+    CHECK(!wsamp::parseWsa1Frame(shortPayload, rate, idx, out));
+
+    std::vector<uint8_t> hugeCount = frame;
+    hugeCount[12] = 0xFF; hugeCount[13] = 0xFF; hugeCount[14] = 0x00; hugeCount[15] = 0x00;  // 65535 samples
+    CHECK(!wsamp::parseWsa1Frame(hugeCount, rate, idx, out));
+
+    std::vector<uint8_t> tiny = {'W', 'S', 'A', '1'};
+    CHECK(!wsamp::parseWsa1Frame(tiny, rate, idx, out));
+}
+
 int main() {
+    testWsa1Parse();
     testSha1Vectors();
     testBase64Vectors();
     testRfc6455Handshake();

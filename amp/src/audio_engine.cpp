@@ -86,6 +86,7 @@ AudioEngine::AudioEngine() {
 
     workBuf_.assign(kMaxBlock, 0.0f);
     dryConvertBuf_.assign(kMaxBlock, 0);
+    guideBuf_.assign(kMaxBlock, 0.0f);
     chain_.prepare(48000.0, kMaxBlock);
 }
 
@@ -532,7 +533,17 @@ bool AudioEngine::restart(const std::string& requestedDeviceName, int inputChann
     chain_.prepare(targetRate, kMaxBlock);
     workBuf_.assign(kMaxBlock, 0.0f);
     dryConvertBuf_.assign(kMaxBlock, 0);
+    guideBuf_.assign(kMaxBlock, 0.0f);
     dryRing_.reset();
+    guideRing_.reset();
+    seenGuideFlushSeq_ = guideFlushSeq_.load(std::memory_order_acquire);
+    guidePrimed_ = false;
+    guideHasPrev_ = false;
+    guideResamplerPos_ = 0.0;
+    guideS0_ = 0.0f;
+    guideS1_ = 0.0f;
+    guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
+    guideUnderruns_.store(0, std::memory_order_relaxed);
     xruns_.store(0, std::memory_order_relaxed);
     streamDrops_.store(0, std::memory_order_relaxed);
     cpuLoad_.store(0.0f, std::memory_order_relaxed);
@@ -655,6 +666,174 @@ void AudioEngine::updatePeakAtomic(std::atomic<float>& target, float val) noexce
     }
 }
 
+void AudioEngine::setGuideActive(bool active, uint32_t sampleRate) noexcept {
+    if (active) {
+        if (sampleRate > 0) {
+            guideSampleRate_.store(sampleRate, std::memory_order_relaxed);
+        }
+        guideFlushSeq_.fetch_add(1, std::memory_order_acq_rel);
+        guideActive_.store(true, std::memory_order_release);
+    } else {
+        guideActive_.store(false, std::memory_order_release);
+        guideFlushSeq_.fetch_add(1, std::memory_order_acq_rel);
+        guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
+        if (!running_.load(std::memory_order_acquire)) {
+            guideRing_.reset();
+        }
+    }
+}
+
+void AudioEngine::setGuideGain(float gain) noexcept {
+    const float clamped = std::clamp(gain, 0.0f, 2.0f);
+    guideGain_.store(clamped, std::memory_order_relaxed);
+}
+
+void AudioEngine::pushGuide(std::span<const int16_t> samples, uint32_t sampleRate) noexcept {
+    if (!guideActive_.load(std::memory_order_acquire) || samples.empty()) {
+        return;
+    }
+    if (sampleRate > 0) {
+        guideSampleRate_.store(sampleRate, std::memory_order_relaxed);
+    }
+
+    constexpr float kInv32768 = 1.0f / 32768.0f;
+    float convBuf[512];
+    size_t idx = 0;
+    while (idx < samples.size()) {
+        const size_t batch = std::min(samples.size() - idx, size_t{512});
+        for (size_t i = 0; i < batch; ++i) {
+            convBuf[i] = static_cast<float>(samples[idx + i]) * kInv32768;
+        }
+        const size_t pushed = guideRing_.pushBatch(convBuf, batch);
+        if (pushed < batch) {
+            break;
+        }
+        idx += batch;
+    }
+}
+
+void AudioEngine::fillGuideChunk(int chunk) noexcept {
+    const uint32_t flushSeq = guideFlushSeq_.load(std::memory_order_acquire);
+    if (flushSeq != seenGuideFlushSeq_) {
+        float drainTmp[256];
+        while (guideRing_.popBatch(drainTmp, 256) > 0) {
+        }
+        guidePrimed_ = false;
+        guideHasPrev_ = false;
+        guideResamplerPos_ = 0.0;
+        guideS0_ = 0.0f;
+        guideS1_ = 0.0f;
+        guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
+        seenGuideFlushSeq_ = flushSeq;
+    }
+
+    if (!guideActive_.load(std::memory_order_acquire)) {
+        std::memset(guideBuf_.data(), 0, static_cast<size_t>(chunk) * sizeof(float));
+        guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
+        return;
+    }
+
+    const double deviceRate = (actualSampleRate_ > 1.0) ? actualSampleRate_ : 48000.0;
+    const uint32_t rawGuideRate = guideSampleRate_.load(std::memory_order_relaxed);
+    const double guideRate = (rawGuideRate > 1000u) ? static_cast<double>(rawGuideRate) : deviceRate;
+    const float gain = guideGain_.load(std::memory_order_relaxed);
+
+    const size_t targetSamples = std::max<size_t>(
+        2u, static_cast<size_t>(std::llround((kGuideTargetMs / 1000.0) * guideRate)));
+    const size_t maxSamples = targetSamples +
+        static_cast<size_t>(std::llround((kGuideMaxExcessMs / 1000.0) * guideRate));
+
+    size_t avail = guideRing_.size();
+    if (!guidePrimed_) {
+        if (avail < targetSamples) {
+            std::memset(guideBuf_.data(), 0, static_cast<size_t>(chunk) * sizeof(float));
+            guideBufferedMs_.store(
+                static_cast<float>((static_cast<double>(avail) / guideRate) * 1000.0),
+                std::memory_order_relaxed);
+            return;
+        }
+        guidePrimed_ = true;
+        guideHasPrev_ = false;
+        guideResamplerPos_ = 0.0;
+    }
+
+    // Trim excess buffered audio on burst/clock drift down to jitter target
+    if (avail > maxSamples) {
+        size_t toDrop = avail - targetSamples;
+        float discard[256];
+        while (toDrop > 0) {
+            const size_t batch = std::min(toDrop, size_t{256});
+            const size_t popped = guideRing_.popBatch(discard, batch);
+            if (popped == 0) break;
+            toDrop -= popped;
+        }
+        guideHasPrev_ = false;
+        guideResamplerPos_ = 0.0;
+    }
+
+    const bool sameRate = (std::abs(guideRate - deviceRate) < 1.0);
+    if (sameRate) {
+        guideHasPrev_ = false;
+        guideResamplerPos_ = 0.0;
+
+        const size_t popped = guideRing_.popBatch(guideBuf_.data(), static_cast<size_t>(chunk));
+        for (size_t i = 0; i < popped; ++i) {
+            guideBuf_[i] *= gain;
+        }
+        if (popped < static_cast<size_t>(chunk)) {
+            std::memset(guideBuf_.data() + popped, 0,
+                        (static_cast<size_t>(chunk) - popped) * sizeof(float));
+            guideUnderruns_.fetch_add(1, std::memory_order_relaxed);
+            guidePrimed_ = false;
+            guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
+            return;
+        }
+    } else {
+        const double ratio = guideRate / deviceRate;
+        if (!guideHasPrev_) {
+            if (!guideRing_.tryPop(guideS0_) || !guideRing_.tryPop(guideS1_)) {
+                std::memset(guideBuf_.data(), 0, static_cast<size_t>(chunk) * sizeof(float));
+                guideUnderruns_.fetch_add(1, std::memory_order_relaxed);
+                guidePrimed_ = false;
+                guideHasPrev_ = false;
+                guideResamplerPos_ = 0.0;
+                guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
+                return;
+            }
+            guideHasPrev_ = true;
+            guideResamplerPos_ = 0.0;
+        }
+
+        for (int i = 0; i < chunk; ++i) {
+            while (guideResamplerPos_ >= 1.0) {
+                guideS0_ = guideS1_;
+                float nextSample = 0.0f;
+                if (!guideRing_.tryPop(nextSample)) {
+                    std::memset(guideBuf_.data() + i, 0,
+                                static_cast<size_t>(chunk - i) * sizeof(float));
+                    guideUnderruns_.fetch_add(1, std::memory_order_relaxed);
+                    guidePrimed_ = false;
+                    guideHasPrev_ = false;
+                    guideResamplerPos_ = 0.0;
+                    guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
+                    return;
+                }
+                guideS1_ = nextSample;
+                guideResamplerPos_ -= 1.0;
+            }
+
+            const float frac = static_cast<float>(guideResamplerPos_);
+            guideBuf_[i] = (guideS0_ + (guideS1_ - guideS0_) * frac) * gain;
+            guideResamplerPos_ += ratio;
+        }
+    }
+
+    const size_t rem = guideRing_.size();
+    guideBufferedMs_.store(
+        static_cast<float>((static_cast<double>(rem) / guideRate) * 1000.0),
+        std::memory_order_relaxed);
+}
+
 int AudioEngine::paStreamCallback(const void* input,
                                   void* output,
                                   unsigned long frameCount,
@@ -737,11 +916,20 @@ int AudioEngine::handleCallback(const void* input,
                                    std::memory_order_relaxed);
         }
 
-        // 3. Process DSP chain (unless muted or bypassed)
+        // 3. Pull guide guitar chunk & process DSP chain (unless muted or bypassed)
+        const bool hasGuide = guideActive_.load(std::memory_order_acquire);
+        fillGuideChunk(chunk);
+
         if (isMute) {
             std::memset(workBuf_.data(), 0, static_cast<size_t>(chunk) * sizeof(float));
-        } else if (!isBypass) {
-            chain_.process(workBuf_.data(), chunk);
+        } else if (isBypass) {
+            if (hasGuide) {
+                for (int i = 0; i < chunk; ++i) {
+                    workBuf_[i] += guideBuf_[i];
+                }
+            }
+        } else {
+            chain_.process(workBuf_.data(), chunk, hasGuide ? guideBuf_.data() : nullptr);
         }
 
         if (monitorEnabled_.load(std::memory_order_acquire)) {
@@ -907,7 +1095,12 @@ AudioStatus AudioEngine::getStatus() {
         } else {
             st.monitorLatencyMs = 0.0;
         }
+        st.guideLatencyMs = kGuideTargetMs + outputLatencyMs_;
     }
+
+    st.guideActive = guideActive_.load(std::memory_order_acquire);
+    st.guideBufferedMs = st.guideActive ? guideBufferedMs_.load(std::memory_order_relaxed) : 0.0f;
+    st.guideUnderruns = guideUnderruns_.load(std::memory_order_relaxed);
 
     const float inPk = inPeakLin_.exchange(0.0f, std::memory_order_relaxed);
     const float outPk = outPeakLin_.exchange(0.0f, std::memory_order_relaxed);

@@ -307,6 +307,10 @@ export class AmpLink extends EventTarget {
     return this.state === 'online' ? this.jitterBuffer.latencyMs : 0;
   }
 
+  get supportsGuide() {
+    return Array.isArray(this.serverInfo?.features) && this.serverInfo.features.includes('guide');
+  }
+
   _setState(nextState) {
     if (this.state === nextState) return;
     this.state = nextState;
@@ -390,6 +394,7 @@ export class AmpLink extends EventTarget {
       if (this._ws !== ws) return;
       this._backoffMs = 1000;
       this._pausedForHidden = false;
+      this.serverInfo = null;
       this.jitterBuffer.reset();
       if (this._workletNode) {
         this._workletNode.port.postMessage({ type: 'reset' });
@@ -455,6 +460,7 @@ export class AmpLink extends EventTarget {
 
     if (msg.type === 'hello') {
       this.serverInfo = msg;
+      this._emit('hello', msg);
     } else if (msg.type === 'status') {
       this.status = msg;
       this._emit('status', msg);
@@ -583,6 +589,31 @@ export class AmpLink extends EventTarget {
     } catch (_) {
       return false;
     }
+  }
+
+  sendBinary(arrayBuffer) {
+    if (!this._ws || this._ws.readyState !== 1 || !arrayBuffer) return false;
+    try {
+      this._ws.send(arrayBuffer);
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  startGuide(sampleRate) {
+    const sr = Math.round(Number(sampleRate) || 48000);
+    return this._send({ type: 'guide', on: true, sampleRate: sr });
+  }
+
+  stopGuide() {
+    return this._send({ type: 'guide', on: false });
+  }
+
+  setGuideGain(g) {
+    const n = Number(g);
+    const gain = Math.max(0, Math.min(2, Number.isFinite(n) ? n : 1));
+    return this._send({ type: 'guide', gain });
   }
 
   setPreset(id) {

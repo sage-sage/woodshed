@@ -73,10 +73,11 @@ public:
 
     TrayStateSnapshot getTraySnapshot() const;
 
-    // IWsMessageHandler overrides (called on WsServer thread; push to command queue)
+    // IWsMessageHandler overrides (called on WsServer thread; push to command queue / lock-free ring)
     void onClientConnected(uint32_t clientId) override;
     void onClientDisconnected(uint32_t clientId) override;
     void onClientTextMessage(uint32_t clientId, std::string_view text) override;
+    void onClientBinaryMessage(uint32_t clientId, std::span<const uint8_t> data) override;
 
 private:
     enum class CmdType {
@@ -154,6 +155,9 @@ private:
 
     uint32_t runningFrameIndex_ = 0;
     std::vector<int16_t> spscDrainBuf_;
+
+    std::atomic<uint32_t> guideClientId_{0};
+    std::vector<int16_t> guideDecodeBuf_;
 
     std::atomic<bool> browseDialogOpen_{false};
     std::mutex dialogThreadsMutex_;

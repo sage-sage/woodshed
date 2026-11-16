@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T21:46:26-08:00"
+  "updated": "2026-11-15T22:28:42-08:00"
  },
  "setup": {
-  "version": "2.3.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.3.0/Woodshed-Setup.exe",
-  "sha256": "81e37beba27c8b1b0ab0e5cd628555438692cd1aa82451f38f2cd96c8978f3ea",
-  "notes": "Woodshed 2.3.0: new look (Rodeo Night: poster type, square corners, vermilion for the main action; new song tiles) and a guide guitar that plays recorded FluidR3 guitar samples"
+  "version": "2.4.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.4.0/Woodshed-Setup.exe",
+  "sha256": "bc0281f43f7fe9dcdedf4cf4c82bfac9dae9b7d1e13c60e9ed07cab5e57dde89",
+  "notes": "Woodshed 2.4.0: the guide guitar plays through Woodshed Amp and your active preset/pedalboard when the amp is connected (Settings > Guide sound to turn it off)"
  },
  "amp": {
-  "version": "2.3.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.3.0/woodshed-amp.exe",
-  "sha256": "b0ce24cbe299955148dd1b03e19235b88c0cf909f2c3e39748c58c5c05767393",
-  "notes": "Woodshed 2.3.0: new look (Rodeo Night: poster type, square corners, vermilion for the main action; new song tiles) and a guide guitar that plays recorded FluidR3 guitar samples"
+  "version": "2.4.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.4.0/woodshed-amp.exe",
+  "sha256": "2385709a6812f3c648f657695bf2f1bfcf8437bbada074b539271ac2ea1d33d1",
+  "notes": "Woodshed 2.4.0: the guide guitar plays through Woodshed Amp and your active preset/pedalboard when the amp is connected (Settings > Guide sound to turn it off)"
  },
  "extension": {
   "version": "1.3.0",

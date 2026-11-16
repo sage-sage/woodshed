@@ -147,20 +147,21 @@ void Chain::reclaimLocked() {
     });
 }
 
-void Chain::process(float* io, int n) noexcept {
+void Chain::process(float* io, int n, const float* addAfterGate) noexcept {
     Board* board = activeBoard_.load(std::memory_order_acquire);
     if (io != nullptr && n > 0) {
         int offset = 0;
         while (offset < n) {
             const int chunk = std::min(n - offset, maxBlock_);
-            processChunk(io + offset, chunk, board);
+            const float* guideChunk = (addAfterGate != nullptr) ? (addAfterGate + offset) : nullptr;
+            processChunk(io + offset, chunk, board, guideChunk);
             offset += chunk;
         }
     }
     audioEpoch_.fetch_add(1, std::memory_order_release);
 }
 
-void Chain::processChunk(float* io, int n, Board* board) noexcept {
+void Chain::processChunk(float* io, int n, Board* board, const float* addAfterGate) noexcept {
     smoothAndApplyParams(n);
 
     // 1. Input trim (dB)
@@ -173,6 +174,13 @@ void Chain::processChunk(float* io, int n, Board* board) noexcept {
 
     // 2. Noise gate (keyed on INPUT)
     gate_.process(io, n);
+
+    // 2b. Optional guide signal mixed after trim + gate, before the pedalboard
+    if (addAfterGate != nullptr) {
+        for (int i = 0; i < n; ++i) {
+            io[i] += addAfterGate[i];
+        }
+    }
 
     // 3. Pedalboard
     if (board != nullptr) {

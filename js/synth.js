@@ -150,6 +150,9 @@ export class GuitarSynth {
     this.sampleSets = new Map();   // FluidR3 instrument name -> SampleSet (loaded on first use)
     this.activeVoices = new Set();
     this.a4 = 440;
+    this._ampCapture = null;
+    this.routeLatency = 0;
+    this._requestedToneId = 'clean';
     this.toneId = 'clean';
     this.setTone('clean');
   }
@@ -205,7 +208,9 @@ export class GuitarSynth {
   }
 
   setTone(id) {
-    const resolvedId = TONE_PRESETS[id] ? id : 'clean';
+    const requestedId = TONE_PRESETS[id] ? id : 'clean';
+    this._requestedToneId = requestedId;
+    const resolvedId = this.isAmpRouted ? 'clean' : requestedId;
     const cfg = TONE_PRESETS[resolvedId];
     this.toneId = resolvedId;
 
@@ -238,6 +243,53 @@ export class GuitarSynth {
   setVolume(vol) {
     const v = Math.max(0, Math.min(1.5, Number(vol) ?? 0.7));
     this.output.gain.setTargetAtTime(v, this.ctx.currentTime, 0.01);
+  }
+
+  get isAmpRouted() {
+    return this._ampCapture !== null;
+  }
+
+  setAmpRoute(route) {
+    if (route && route.capture) {
+      const nextLatency = Math.max(0, Number(route.latencySec) || 0);
+      if (this._ampCapture === route.capture) {
+        this.routeLatency = nextLatency;
+        return;
+      }
+      if (this._ampCapture) {
+        try {
+          this.output.disconnect(this._ampCapture);
+        } catch (_) {
+          // Ignore
+        }
+      } else {
+        try {
+          this.output.disconnect(this.preHP);
+        } catch (_) {
+          // Ignore
+        }
+      }
+      this._ampCapture = route.capture;
+      this.routeLatency = nextLatency;
+      this.output.connect(this._ampCapture);
+      this.setTone(this._requestedToneId);
+      return;
+    }
+
+    if (!this._ampCapture) {
+      this.routeLatency = 0;
+      return;
+    }
+    const prevCapture = this._ampCapture;
+    this._ampCapture = null;
+    this.routeLatency = 0;
+    try {
+      this.output.disconnect(prevCapture);
+    } catch (_) {
+      // Ignore
+    }
+    this.output.connect(this.preHP);
+    this.setTone(this._requestedToneId);
   }
 
   setSelfTestRoute(guitarInput, enabled = false, gain = 0.85) {
@@ -344,7 +396,8 @@ export class GuitarSynth {
    * lifts the fretting hand off everything. strings = null damps every voice that started before `when`.
    */
   damp(when, strings = null) {
-    const t = Math.max(this.ctx.currentTime, Number(when) || 0);
+    const shift = this.isAmpRouted ? this.routeLatency : 0;
+    const t = Math.max(this.ctx.currentTime, (Number(when) || 0) - shift);
     for (const v of this.activeVoices) {
       if (v.startTime >= t - 0.001 || v.damped) continue;
       if (strings && !strings.includes(v.string)) continue;
@@ -361,7 +414,8 @@ export class GuitarSynth {
 
   playNote(midi, when = 0, dur = 0.4, gain = 0.8, string = -1) {
     const now = this.ctx.currentTime;
-    const startTime = Math.max(now, Number(when) || now);
+    const shift = this.isAmpRouted ? this.routeLatency : 0;
+    const startTime = Math.max(now, (Number(when) || now) - shift);
     const noteDur = Math.max(0.05, Math.min(2.9, Number(dur) || 0.4));
 
     // A recorded sample when this tone's set is decoded, else the plucked-string model.
@@ -578,7 +632,9 @@ export class GuideScheduler {
     }
     this._lastTabTime = curTab;
 
-    const tabHorizon = curTab + this.lookaheadSec * rate;
+    const routeLat = this.synth?.isAmpRouted ? (Number(this.synth.routeLatency) || 0) : 0;
+    const effectiveLookahead = routeLat > 0.12 ? routeLat + 0.05 : this.lookaheadSec;
+    const tabHorizon = curTab + effectiveLookahead * rate;
     const audioNow = this.synth.ctx.currentTime;
 
     if (this.guideEnabled) {

@@ -496,7 +496,11 @@ void AppController::enqueueSetStartWithWindows(bool enabled) {
 void AppController::onClientConnected(uint32_t /*clientId*/) {
 }
 
-void AppController::onClientDisconnected(uint32_t /*clientId*/) {
+void AppController::onClientDisconnected(uint32_t clientId) {
+    uint32_t expected = clientId;
+    if (guideClientId_.compare_exchange_strong(expected, 0, std::memory_order_acq_rel)) {
+        audioEngine_.setGuideActive(false);
+    }
 }
 
 void AppController::onClientTextMessage(uint32_t clientId, std::string_view text) {
@@ -509,6 +513,23 @@ void AppController::onClientTextMessage(uint32_t clientId, std::string_view text
         cmdQueue_.push_back(std::move(cmd));
     }
     cmdCv_.notify_one();
+}
+
+void AppController::onClientBinaryMessage(uint32_t clientId, std::span<const uint8_t> data) {
+    if (clientId == 0 || guideClientId_.load(std::memory_order_acquire) != clientId) {
+        return;
+    }
+    if (!audioEngine_.isGuideActive()) {
+        return;
+    }
+    uint32_t sampleRate = 48000;
+    uint32_t frameIndex = 0;
+    if (!parseWsa1Frame(data, sampleRate, frameIndex, guideDecodeBuf_)) {
+        return;
+    }
+    if (!guideDecodeBuf_.empty()) {
+        audioEngine_.pushGuide(guideDecodeBuf_, sampleRate);
+    }
 }
 
 void AppController::markPresetsDirty() {
@@ -883,6 +904,34 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
         wsServer_.sendTextToClient(clientId, buildPresetsJson());
         wsServer_.sendTextToClient(clientId, buildDevicesJson());
         wsServer_.sendTextToClient(clientId, buildStatusJson(audioEngine_.getStatus()));
+        return;
+    }
+
+    if (type == "guide") {
+        if (msg.contains("gain") && msg["gain"].is_number()) {
+            const float g = std::clamp(msg["gain"].get<float>(), 0.0f, 2.0f);
+            audioEngine_.setGuideGain(g);
+        }
+        if (msg.contains("on") && msg["on"].is_boolean()) {
+            const bool on = msg["on"].get<bool>();
+            if (on) {
+                uint32_t sr = 48000;
+                if (msg.contains("sampleRate") && msg["sampleRate"].is_number()) {
+                    const double rawSr = msg["sampleRate"].get<double>();
+                    if (rawSr >= 8000.0 && rawSr <= 384000.0) {
+                        sr = static_cast<uint32_t>(std::lround(rawSr));
+                    }
+                }
+                guideClientId_.store(clientId, std::memory_order_release);
+                audioEngine_.setGuideActive(true, sr);
+            } else {
+                const uint32_t cur = guideClientId_.load(std::memory_order_acquire);
+                if (cur == 0 || cur == clientId) {
+                    guideClientId_.store(0, std::memory_order_release);
+                    audioEngine_.setGuideActive(false);
+                }
+            }
+        }
         return;
     }
 
@@ -2082,7 +2131,7 @@ std::string AppController::buildHelloJson() const {
         {"app", "woodshed-amp"},
         {"version", kAmpVersion},
         {"protocol", 1},
-        {"features", json::array({"board", "graph", "customPresets"})}
+        {"features", json::array({"board", "graph", "customPresets", "guide"})}
     };
     return j.dump();
 }
@@ -2310,7 +2359,13 @@ std::string AppController::buildStatusJson(const AudioStatus& st) const {
         {"monitorRunning", st.monitorRunning},
         {"monitorLatencyMs", round1(st.monitorLatencyMs)},
         {"monitorUnderruns", st.monitorUnderruns},
-        {"monitorError", st.monitorError}
+        {"monitorError", st.monitorError},
+        {"guide", {
+            {"active", st.guideActive},
+            {"bufferedMs", round1(st.guideBufferedMs)},
+            {"underruns", st.guideUnderruns},
+            {"latencyMs", round1(st.guideLatencyMs)}
+        }}
     };
     return j.dump();
 }

@@ -20,6 +20,7 @@ public:
     virtual void onClientConnected(uint32_t clientId) = 0;
     virtual void onClientDisconnected(uint32_t clientId) = 0;
     virtual void onClientTextMessage(uint32_t clientId, std::string_view text) = 0;
+    virtual void onClientBinaryMessage(uint32_t clientId, std::span<const uint8_t> data) {}
 };
 
 // Origin allow-list check per SPEC.md
@@ -90,6 +91,12 @@ WsDecodeStatus decodeWsFrame(std::span<const uint8_t> buffer,
 std::vector<uint8_t> buildWsa1Frame(uint32_t sampleRate,
                                     uint32_t frameIndex,
                                     std::span<const int16_t> samples);
+
+// Parses and validates a WSA1 binary audio payload into aligned int16_t storage.
+bool parseWsa1Frame(std::span<const uint8_t> payload,
+                    uint32_t& sampleRate,
+                    uint32_t& frameIndex,
+                    std::vector<int16_t>& samples);
 
 class WsServer {
 public:

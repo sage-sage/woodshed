@@ -751,7 +751,33 @@ void testSignalGraph() {
     }
 }
 
+// The guide is added after the noise gate: silence on the guitar input must not gate it, and the guitar
+// path is unchanged when there is no guide.
+void testGuideAfterGate() {
+    constexpr double sr = 48000.0;
+    constexpr int n = 64;
+    wsamp::dsp::Chain chain;
+    chain.prepare(sr, n);
+    chain.setGateThresholdDb(-20.0f);   // a harsh gate: it closes on silence
+    std::vector<float> io(n), guide(n);
+    double phase = 0.0;
+    float maxErr = 0.0f;
+    for (int blk = 0; blk < 400; ++blk) {   // ~0.53 s
+        for (int i = 0; i < n; ++i) {
+            guide[i] = 0.25f * static_cast<float>(std::sin(phase));
+            phase += 2.0 * 3.14159265358979 * 330.0 / sr;
+            io[i] = 0.0f;
+        }
+        chain.process(io.data(), n, guide.data());
+        if (blk > 200) {
+            for (int i = 0; i < n; ++i) maxErr = std::max(maxErr, std::abs(io[i] - guide[i]));
+        }
+    }
+    CHECK(maxErr < 1e-4f);
+}
+
 int main() {
+    testGuideAfterGate();
     testBiquadMagnitude();
     testOversamplerAndAliasing();
     testPresetBoards();

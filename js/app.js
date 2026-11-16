@@ -24,11 +24,13 @@ import {
   deleteSavedTab,
   onSavedTabsChange
 } from './tab-library.js';
+import { startGuideRouting } from './guide-route.js';
 
 const input = new GuitarInput();
 const synth = new GuitarSynth();
 const amp = new AmpLink();
 const { settings } = store;
+startGuideRouting({ amp, synth, settings });
 
 let currentViewInstance = null;
 let currentRecord = null;
@@ -961,6 +963,14 @@ function mountSettings(container) {
             ${Object.entries(TONE_NAMES).map(([id, name]) => `<option value="${id}" ${settings.get('guideTone') === id ? 'selected' : ''}>${escapeHtml(name)}</option>`).join('')}
           </select>
         </div>
+
+        <div class="field">
+          <div style="display:flex;flex-direction:row;align-items:center;justify-content:space-between;gap:12px;">
+            <label for="set-guide-amp" style="margin:0;">Play the guide through Woodshed Amp (your preset)</label>
+            <input type="checkbox" id="set-guide-amp" ${settings.get('guideThroughAmp') !== false ? 'checked' : ''} ${amp.state === 'online' && amp.supportsGuide ? '' : 'disabled'} />
+          </div>
+          <div id="set-guide-amp-hint" style="font-size:12px;color:var(--text-dim, #9aa4b2);margin-top:4px;">${amp.state !== 'online' ? 'Woodshed Amp is offline — when the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.' : (!amp.supportsGuide ? 'Update Woodshed Amp to support guide routing — when a compatible amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.' : 'When the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.')}</div>
+        </div>
       </section>
 
       <section class="card" style="grid-column:1 / -1;">
@@ -1198,6 +1208,38 @@ function mountSettings(container) {
   container.querySelector('#set-guide-tone')?.addEventListener('change', (e) => {
     settings.set('guideTone', e.target.value);
   });
+
+  const guideAmpCheck = container.querySelector('#set-guide-amp');
+  const guideAmpHint = container.querySelector('#set-guide-amp-hint');
+  if (guideAmpCheck) {
+    const syncGuideAmpSettingUI = () => {
+      if (!guideAmpCheck.isConnected) {
+        amp.removeEventListener('state', syncGuideAmpSettingUI);
+        amp.removeEventListener('status', syncGuideAmpSettingUI);
+        amp.removeEventListener('hello', syncGuideAmpSettingUI);
+        return;
+      }
+      const available = amp.state === 'online' && amp.supportsGuide;
+      guideAmpCheck.disabled = !available;
+      if (guideAmpHint) {
+        if (amp.state !== 'online') {
+          guideAmpHint.textContent = 'Woodshed Amp is offline — when the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.';
+        } else if (!amp.supportsGuide) {
+          guideAmpHint.textContent = 'Update Woodshed Amp to support guide routing — when a compatible amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.';
+        } else {
+          guideAmpHint.textContent = 'When the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.';
+        }
+      }
+    };
+    syncGuideAmpSettingUI();
+    amp.addEventListener('state', syncGuideAmpSettingUI);
+    amp.addEventListener('status', syncGuideAmpSettingUI);
+    amp.addEventListener('hello', syncGuideAmpSettingUI);
+    guideAmpCheck.addEventListener('change', (e) => {
+      settings.set('guideThroughAmp', e.target.checked);
+      window.dispatchEvent(new Event('woodshed:settings-changed'));
+    });
+  }
 
   const sourceSelect = container.querySelector('#set-input-source');
   if (sourceSelect) {

@@ -38,7 +38,7 @@ public:
     void reclaim();
 
     // Audio thread: load the Board* once per call, run it, then increment the epoch.
-    void process(float* io, int n) noexcept;
+    void process(float* io, int n, const float* addAfterGate = nullptr) noexcept;
 
     double sampleRate() const noexcept { return sampleRate_; }
     int maxBlock() const noexcept { return maxBlock_; }
@@ -51,7 +51,7 @@ private:
 
     void snapParameters() noexcept;
     void smoothAndApplyParams(int blockSamples) noexcept;
-    void processChunk(float* io, int n, Board* board) noexcept;
+    void processChunk(float* io, int n, Board* board, const float* addAfterGate) noexcept;
     void reclaimLocked();
 
     double sampleRate_ = 48000.0;
