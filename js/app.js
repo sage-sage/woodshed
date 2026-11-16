@@ -30,6 +30,18 @@ const input = new GuitarInput();
 const synth = new GuitarSynth();
 const amp = new AmpLink();
 const { settings } = store;
+
+// Appearance: 'dark' (default), 'light' (Desert Daylight) or 'system' (follows Windows / the browser).
+const systemLight = typeof matchMedia === 'function' ? matchMedia('(prefers-color-scheme: light)') : null;
+function applyTheme() {
+  const pref = settings.get('theme') || 'dark';
+  const light = pref === 'light' || (pref === 'system' && Boolean(systemLight?.matches));
+  document.documentElement.dataset.theme = light ? 'light' : 'dark';
+  // Canvas views read their colours when they draw; tell them to look again.
+  window.dispatchEvent(new Event('woodshed:theme-changed'));
+}
+applyTheme();
+systemLight?.addEventListener?.('change', () => { if ((settings.get('theme') || 'dark') === 'system') applyTheme(); });
 startGuideRouting({ amp, synth, settings });
 
 let currentViewInstance = null;
@@ -957,6 +969,15 @@ function mountSettings(container) {
         </div>
 
         <div class="field">
+          <label for="set-theme">Appearance</label>
+          <select class="select" id="set-theme">
+            <option value="dark" ${(settings.get('theme') || 'dark') === 'dark' ? 'selected' : ''}>Dark (Rodeo Night)</option>
+            <option value="light" ${settings.get('theme') === 'light' ? 'selected' : ''}>Light (Desert Daylight)</option>
+            <option value="system" ${settings.get('theme') === 'system' ? 'selected' : ''}>Match Windows</option>
+          </select>
+        </div>
+
+        <div class="field">
           <label for="set-guide-tone">Guide Sound (the synth that plays the tab)</label>
           <select class="select" id="set-guide-tone">
             <option value="match" ${(settings.get('guideTone') || 'match') === 'match' ? 'selected' : ''}>Match the song's tone</option>
@@ -1205,6 +1226,10 @@ function mountSettings(container) {
     settings.set('showNoteNames', e.target.checked);
   });
 
+  container.querySelector('#set-theme')?.addEventListener('change', (e) => {
+    settings.set('theme', e.target.value);
+    applyTheme();
+  });
   container.querySelector('#set-guide-tone')?.addEventListener('change', (e) => {
     settings.set('guideTone', e.target.value);
   });

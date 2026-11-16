@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T22:28:42-08:00"
+  "updated": "2026-11-15T22:36:15-08:00"
  },
  "setup": {
-  "version": "2.4.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.4.0/Woodshed-Setup.exe",
-  "sha256": "bc0281f43f7fe9dcdedf4cf4c82bfac9dae9b7d1e13c60e9ed07cab5e57dde89",
-  "notes": "Woodshed 2.4.0: the guide guitar plays through Woodshed Amp and your active preset/pedalboard when the amp is connected (Settings > Guide sound to turn it off)"
+  "version": "2.5.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.0/Woodshed-Setup.exe",
+  "sha256": "d576f66619b24629e6c6b3029f03f1ca4079c572bb9b02d53fd6443122fe20bc",
+  "notes": "Woodshed 2.5.0: light mode (Settings > Appearance: Dark, Light or Match Windows), black sidebar, vermilion wordmark and a new vermilion pick icon"
  },
  "amp": {
-  "version": "2.4.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.4.0/woodshed-amp.exe",
-  "sha256": "2385709a6812f3c648f657695bf2f1bfcf8437bbada074b539271ac2ea1d33d1",
-  "notes": "Woodshed 2.4.0: the guide guitar plays through Woodshed Amp and your active preset/pedalboard when the amp is connected (Settings > Guide sound to turn it off)"
+  "version": "2.5.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.0/woodshed-amp.exe",
+  "sha256": "09dae869fc0ff95deb61068e9838080b51e6be59037344305760d31356084823",
+  "notes": "Woodshed 2.5.0: light mode (Settings > Appearance: Dark, Light or Match Windows), black sidebar, vermilion wordmark and a new vermilion pick icon"
  },
  "extension": {
   "version": "1.3.0",

@@ -47,7 +47,7 @@
 body { font-family: var(--font-body); }
 
 /* ---- Left rail ---- */
-.left-rail { background-color: #120f0d; border-right: 1px solid var(--line); }
+
 .brand-wordmark { font-family: var(--font-poster); font-weight: 400; font-size: 28px; letter-spacing: 0.01em; color: var(--fg); }
 .brand-subtitle { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--fg-faint); }
 .brand-subtitle::before, .brand-subtitle::after { content: " \2726 "; color: var(--hot); }
@@ -189,3 +189,98 @@ h1, h2, h3 { letter-spacing: -0.01em; }
 .play-btn-main:active { transform: translate(2px, 2px); box-shadow: 1px 1px 0 var(--fg) !important; }
 
 h2[style*="font-serif"], .serif-heading { font-weight: 800; letter-spacing: -0.01em; }
+
+/* ---- Sidebar: solid black, no wood grain; the wordmark in vermilion ---- */
+.left-rail { background: #0b0a09; background-image: none; border-right: 1px solid #2a2420; }
+.left-rail .rail-input-card.card { background: #120f0d; background-image: none; }
+.titlebar { background: #0b0a09; }
+.brand-wordmark { color: var(--hot); }
+
+/* ==========================================================================
+   Light mode ("Desert Daylight"): cream paper, ink, vermilion. Chosen in Settings > Appearance; the
+   <html data-theme="light"> attribute is set by js/app.js (also for "match Windows").
+   Device screens (note highway, fretboards, faders, pedalboard, tuner dial...) stay dark, like displays
+   on a poster: they re-declare the dark palette below so their text and canvases keep working.
+   ========================================================================== */
+:root[data-theme="light"] {
+  color-scheme: light;
+  --bg: #efe6d3;
+  --panel: #f7f0e2;
+  --panel-2: #e6dac2;
+  --screen: #e6dac2;
+  --screen-2: #ddd0b5;
+  --line: #cdbfa6;
+  --line-strong: #2a1d14;
+  --fg: #2a1d14;
+  --fg-muted: #5c4a3b;
+  --fg-faint: #6f5c4b;
+  --accent: #8f5a24;
+  --accent-ink: #f7f0e2;
+  --accent-soft: rgba(143, 90, 36, 0.12);
+  --hot: #c2381b;
+  --hot-hover: #a82e14;
+  --hot-ink: #f7f0e2;
+  --mustard: #e8b13a;
+  --focus: #c2381b;
+  --good: #2f7a45;
+  --bad: #b3261e;
+  --warn: #8a6100;
+}
+
+/* The dark palette, re-declared on things that are screens or controls with dark surfaces. */
+:root[data-theme="light"] :is(.left-rail, .titlebar, .play-screen, .highway-stage, .fretboard, .screen, .tuner-gauge-card,
+  .fader-bank, .pedal-faders, .pb-viewport, .layer-mini-highway, .highway-preview-box, .sync-timeline-wrap,
+  .tab-textarea, .chord-diagram, pre, .yt-pip-dock, .res-hist, .res-spark-box, .anchor-table-wrap, .ws-dark-scope) {
+  color-scheme: dark;
+  --bg: #1a1613;
+  --panel: #241e1a;
+  --panel-2: #2c251f;
+  --screen: #120f0d;
+  --screen-2: #15110e;
+  --line: #3a2f27;
+  --line-strong: #5a4b3f;
+  --fg: #efe6d6;
+  --fg-muted: #bbae9e;
+  --fg-faint: #8a7b6b;
+  --accent: #d39a5e;
+  --accent-ink: #120f0d;
+  --hot: #e5482c;
+  --hot-hover: #f25a3d;
+  --hot-ink: #120f0d;
+  --good: #a3d4a0;
+  --bad: #e6a092;
+  --warn: #e9d29a;
+  color: var(--fg);
+}
+:root[data-theme="light"] .left-rail { border-right-color: #2a1d14; }
+
+/* Light-mode details */
+:root[data-theme="light"] body { background: var(--bg); color: var(--fg); }
+:root[data-theme="light"] .card { background: var(--panel); border-color: var(--line); }
+:root[data-theme="light"] .song-card { background: var(--panel); border-color: var(--fg); }
+:root[data-theme="light"] .song-card:hover, :root[data-theme="light"] .song-card:focus-within { border-color: var(--hot); }
+:root[data-theme="light"] .song-card-actions { border-top-color: var(--fg); }
+:root[data-theme="light"] .song-card-act + .song-card-act { border-left-color: var(--fg); }
+:root[data-theme="light"] .song-card:hover .song-card-actions,
+:root[data-theme="light"] .song-card:focus-within .song-card-actions { border-top-color: var(--hot); }
+:root[data-theme="light"] .song-card:hover .song-card-act + .song-card-act,
+:root[data-theme="light"] .song-card:focus-within .song-card-act + .song-card-act { border-left-color: var(--hot); }
+:root[data-theme="light"] .song-card-act:hover { background: var(--panel-2); }
+:root[data-theme="light"] .song-card-details { color: var(--hot); }
+:root[data-theme="light"] .song-card.src-text { --strip: #e8b13a; --strip-ink: #2a1d14; }
+:root[data-theme="light"] .add-song-card { border-color: var(--fg-faint); }
+:root[data-theme="light"] .btn { background: var(--panel); border-color: var(--fg); color: var(--fg); }
+:root[data-theme="light"] .btn:hover:not(:disabled) { background: var(--panel-2); }
+:root[data-theme="light"] .btn-ghost { background: transparent; border-color: transparent; color: var(--fg-muted); }
+:root[data-theme="light"] .btn-primary { background: var(--hot); color: var(--hot-ink); border-color: var(--hot); box-shadow: 3px 3px 0 var(--fg); }
+:root[data-theme="light"] .input, :root[data-theme="light"] .select, :root[data-theme="light"] select,
+:root[data-theme="light"] textarea:not(.tab-textarea), :root[data-theme="light"] input[type="text"],
+:root[data-theme="light"] input[type="url"], :root[data-theme="light"] input[type="number"] {
+  background: #fbf7ee; color: var(--fg); border-color: var(--fg-faint);
+}
+:root[data-theme="light"] .chip { border-color: var(--fg-faint); color: var(--fg-muted); }
+:root[data-theme="light"] .toast { background: var(--panel); color: var(--fg); border-color: var(--fg); box-shadow: 4px 4px 0 var(--hot); }
+:root[data-theme="light"] .ws-update-overlay { background: rgba(42, 29, 20, 0.55); }
+
+:root[data-theme="light"] :is(.rail-connect-btn, #setup-amp-dl, .saved-tab-actions .btn).btn-primary { background: transparent; color: var(--accent); border: 1px solid var(--accent); box-shadow: none; }
+:root[data-theme="light"] :is(#btn-metronome, #btn-countin, #btn-fingering).btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: none; }

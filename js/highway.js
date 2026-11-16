@@ -50,7 +50,9 @@ export class Highway {
   _readTheme() {
     const readVar = (name, fallback) => {
       if (typeof document === 'undefined' || !document.documentElement) return fallback;
-      const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+      // From the canvas, so the dark "screen" palette scoped around it applies in light mode too.
+      const target = this.canvas && this.canvas.isConnected ? this.canvas : document.documentElement;
+      const val = getComputedStyle(target).getPropertyValue(name).trim();
       return val || fallback;
     };
 

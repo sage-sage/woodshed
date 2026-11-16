@@ -14,10 +14,13 @@ export const STRING_COLORS = [
 const NS = 'http://www.w3.org/2000/svg';
 let fretboardInstanceSeq = 0;
 
-function readTheme() {
+// Colours come from the element the diagram is drawn in, so a dark "screen" panel keeps its own palette
+// in light mode (css/theme.css scopes dark tokens to those panels).
+function readTheme(el) {
   const readVar = (name, fallback) => {
     if (typeof document === 'undefined' || !document.documentElement) return fallback;
-    const val = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+    const target = el && el.isConnected ? el : document.documentElement;
+    const val = getComputedStyle(target).getPropertyValue(name).trim();
     return val || fallback;
   };
 
@@ -66,7 +69,7 @@ export function renderFretboard(el, {
   if (!el) return;
   el.innerHTML = '';
 
-  const theme = readTheme();
+  const theme = readTheme(el);
   const numStrings = tuning.length;
   const maxFrets = Math.max(5, frets);
   const padL = 46;
@@ -360,7 +363,7 @@ export function renderChordDiagram(el, {
   if (!el) return;
   el.innerHTML = '';
 
-  const theme = readTheme();
+  const theme = readTheme(el);
   const numStrings = tuning.length;
   const fretted = notes.map((n) => n.fret).filter((f) => f > 0);
   const minFret = fretted.length > 0 ? Math.min(...fretted) : 1;
