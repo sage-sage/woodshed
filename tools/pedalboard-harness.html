@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Pedalboard harness</title>
+<!-- Mounts the real Pedalboard view against a fake Woodshed Amp, so the page can be checked without the amp running. -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800;900&family=Archivo+Narrow:wght@500;600;700&family=JetBrains+Mono:wght@500;700&family=Rye&family=Ultra&family=Caveat:wght@600;700&family=Ewert&family=Monoton&family=Pacifico&family=Press+Start+2P&family=Special+Elite&display=swap" />
+<link rel="stylesheet" href="../css/style.css" />
+<link rel="stylesheet" href="../css/views.css" />
+<link rel="stylesheet" href="../css/pedalboard.css" />
+<link rel="stylesheet" href="../css/pedal-art.css" />
+<base href="../" />
+<style>html, body { height: 100%; margin: 0; } #main { height: 100vh; }</style>
+</head>
+<body>
+<main id="main" class="pedalboard-view"></main>
+<script type="module">
+import { mount } from './js/pedalboard.js';
+
+const P = (key, label, min, max, def, step, unit = '', options = []) => ({ key, label, min, max, def, step, unit, options });
+const blockTypes = [
+  { id: 'amp', name: 'Amp', category: 'amp', params: [P('character', 'Character', 0, 4, 0, 1, '', ['Clean', 'Breakup', 'Crunch', 'High gain', 'Fuzz']), P('gain', 'Gain', 0, 10, 3, 0.1), P('bass', 'Bass', 0, 10, 5, 0.1), P('mid', 'Mid', 0, 10, 5, 0.1), P('treble', 'Treble', 0, 10, 5, 0.1), P('presence', 'Presence', 0, 10, 5, 0.1), P('tight', 'Tight', 20, 400, 80, 1, 'Hz'), P('level', 'Level', -24, 12, 0, 0.5, 'dB')] },
+  { id: 'nam', name: 'NAM capture', category: 'amp', usesFile: true, fileKind: 'nam', params: [P('level', 'Level', -24, 12, 0, 0.5, 'dB')] },
+  { id: 'cab', name: 'Cabinet', category: 'cab', params: [P('model', 'Model', 0, 4, 0, 1, '', ['4x12 closed', '2x12 open', '1x12 open', 'Acoustic', 'Bass']), P('level', 'Level', -24, 12, 0, 0.5, 'dB')] },
+  { id: 'ir', name: 'Impulse response', category: 'cab', usesFile: true, fileKind: 'ir', params: [P('level', 'Level', -24, 12, 0, 0.5, 'dB')] },
+  { id: 'eq', name: 'EQ', category: 'eq', params: [P('low', 'Low', -15, 15, 0, 0.5, 'dB'), P('mid', 'Mid', -15, 15, 0, 0.5, 'dB'), P('high', 'High', -15, 15, 0, 0.5, 'dB')] },
+  { id: 'overdrive', name: 'Overdrive', category: 'drive', params: [P('drive', 'Drive', 0, 1, 0.4, 0.01), P('level', 'Level', -24, 12, -6, 0.5, 'dB')] },
+  { id: 'chorus', name: 'Chorus', category: 'modulation', params: [P('rate', 'Rate', 0.05, 5, 0.6, 0.01, 'Hz'), P('depth', 'Depth', 0, 1, 0.5, 0.01), P('delay', 'Delay', 2, 20, 8, 0.1, 'ms'), P('feedback', 'Feedback', 0, 0.9, 0.2, 0.01), P('mix', 'Mix', 0, 1, 0.5, 0.01)] },
+  { id: 'flanger', name: 'Flanger', category: 'modulation', params: [P('rate', 'Rate', 0.05, 5, 0.3, 0.01, 'Hz'), P('depth', 'Depth', 0, 1, 0.5, 0.01), P('delay', 'Delay', 0.1, 7, 1, 0.1, 'ms'), P('feedback', 'Feedback', 0, 0.95, 0.6, 0.01), P('mix', 'Mix', 0, 1, 0.5, 0.01)] },
+  { id: 'phaser', name: 'Phaser', category: 'modulation', params: [P('rate', 'Rate', 0.05, 5, 0.4, 0.01, 'Hz'), P('depth', 'Depth', 0, 1, 0.8, 0.01), P('freq', 'Center', 200, 3000, 700, 10, 'Hz'), P('feedback', 'Feedback', 0, 0.9, 0.3, 0.01), P('stages', 'Stages', 0, 3, 1, 1, '', ['2', '4', '6', '8']), P('mix', 'Mix', 0, 1, 0.5, 0.01)] },
+  { id: 'tremolo', name: 'Tremolo', category: 'modulation', params: [P('rate', 'Rate', 0.5, 15, 5, 0.1, 'Hz'), P('depth', 'Depth', 0, 1, 0.6, 0.01), P('wave', 'Wave', 0, 2, 0, 1, '', ['Sine', 'Triangle', 'Square'])] },
+  { id: 'autowah', name: 'Auto-wah', category: 'modulation', params: [P('wah', 'Wah', 0, 1, 0.5, 0.01), P('level', 'Level', 0, 1, 0.6, 0.01), P('mix', 'Mix', 0, 1, 1, 0.01)] },
+  { id: 'delay', name: 'Delay', category: 'time', params: [P('time', 'Time', 20, 1500, 380, 1, 'ms'), P('feedback', 'Feedback', 0, 0.9, 0.35, 0.01), P('tone', 'Tone', 1000, 12000, 5000, 50, 'Hz'), P('mix', 'Mix', 0, 1, 0.3, 0.01)] },
+  { id: 'reverb', name: 'Reverb', category: 'time', params: [P('type', 'Type', 0, 1, 0, 1, '', ['Room', 'Lush']), P('size', 'Size', 0, 1, 0.5, 0.01), P('tone', 'Tone', 0, 1, 0.5, 0.01), P('mix', 'Mix', 0, 1, 0.25, 0.01)] },
+  { id: 'mixer', name: 'Mixer', category: 'utility', inputs: 2, params: [P('balance', 'A / B', 0, 1, 0.5, 0.01), P('level', 'Level', -24, 12, 0, 0.5, 'dB')] },
+  { id: 'volume', name: 'Volume', category: 'utility', params: [P('level', 'Level', -60, 12, 0, 0.5, 'dB')] },
+];
+const order = ['volume', 'overdrive', 'amp', 'nam', 'cab', 'ir', 'eq', 'chorus', 'flanger', 'phaser', 'tremolo', 'autowah', 'delay', 'reverb', 'mixer'];
+const nodes = order.map((type, k) => ({ uid: 'n' + k, type, x: 10 + (k % 5) * 9, y: 2 + Math.floor(k / 5) * 6, enabled: true,
+  params: Object.fromEntries(blockTypes.find((b) => b.id === type).params.map((p) => [p.key, p.def])) }));
+const cables = [{ from: 'in', to: 'n0' }, ...nodes.slice(1).map((n, k) => ({ from: nodes[k].uid, to: n.uid })), { from: nodes[nodes.length - 1].uid, to: 'out' }];
+const preset = { id: 'harness', name: 'Harness board', builtin: false, graph: { nodes, cables, io: { inX: 1, inY: 8, outX: 56, outY: 8 }, inputTrimDb: 0, outputLevelDb: 0 } };
+
+class FakeAmp extends EventTarget {
+  constructor() { super(); this.state = 'online'; this.serverInfo = { version: '2.2.0' }; this.status = { preset: 'harness' };
+    this.presets = { current: 'harness', list: [preset], blockTypes, limits: { maxBlocks: 16, maxNam: 3, maxCustomPresets: 20 } }; this.log = []; }
+  _note(...a) { this.log.push(a); window.__ampLog = this.log; }
+  setBlockParam(...a) { this._note('param', ...a); }
+  setBlockEnabled(...a) { this._note('enable', ...a); }
+  setBoardGlobal(...a) { this._note('global', ...a); }
+  setPreset(...a) { this._note('setPreset', ...a); }
+  moveNode(...a) { this._note('move', ...a); }
+  addNode() {} removeNode() {} addCable() {} removeCable() {} browse() {} clearFile() {}
+  newPreset() {} duplicatePreset() {} deletePreset() {} renamePreset() {} resetPreset() {} importPreset() {} exportPreset() {}
+}
+const amp = new FakeAmp();
+window.__amp = amp;
+const store = new Map();
+window.__view = mount(document.getElementById('main'), { amp, toast() {}, settings: { get: (k) => store.get(k), set: (k, v) => store.set(k, v) } });
+// the real amp sends status 4x a second; do the same so re-render behaviour is realistic
+setInterval(() => amp.dispatchEvent(new Event('status')), 250);
+</script>
+</body>
+</html>

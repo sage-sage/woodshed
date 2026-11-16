@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T22:36:15-08:00"
+  "updated": "2026-11-15T22:45:28-08:00"
  },
  "setup": {
   "version": "2.5.0",
   "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.0/Woodshed-Setup.exe",
-  "sha256": "d576f66619b24629e6c6b3029f03f1ca4079c572bb9b02d53fd6443122fe20bc",
-  "notes": "Woodshed 2.5.0: light mode (Settings > Appearance: Dark, Light or Match Windows), black sidebar, vermilion wordmark and a new vermilion pick icon"
+  "sha256": "88e9eb6a1259212385fe0ae02ccd343df8bcadaf05e350d98c630601a331251c",
+  "notes": "Pedalboard: themed western pedals on every tile and a full animated pedal in the inspector whose knobs drive the amp; board no longer re-renders on every amp status tick"
  },
  "amp": {
   "version": "2.5.0",
   "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.0/woodshed-amp.exe",
   "sha256": "09dae869fc0ff95deb61068e9838080b51e6be59037344305760d31356084823",
-  "notes": "Woodshed 2.5.0: light mode (Settings > Appearance: Dark, Light or Match Windows), black sidebar, vermilion wordmark and a new vermilion pick icon"
+  "notes": "Pedalboard: themed western pedals on every tile and a full animated pedal in the inspector whose knobs drive the amp; board no longer re-renders on every amp status tick"
  },
  "extension": {
   "version": "1.3.0",

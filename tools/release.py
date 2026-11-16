@@ -26,7 +26,7 @@ PUB = os.path.join(HOME, "woodshed-pub")
 REPO = "woodshed"
 
 SITE_FILES = ["index.html", "README.md"]
-SITE_DIRS = ["css", "js", "vendor", "icons", "downloads", "test", "tools"]
+SITE_DIRS = ["css", "js", "img", "vendor", "icons", "downloads", "test", "tools"]
 AMP_FILES = ["build.sh", "CMakeLists.txt", "SPEC.md", "README.md"]
 AMP_DIRS = ["src", "tools", "tests", "installer"]
 

@@ -1,4 +1,5 @@
 import { isDesktop, desktop, postToHost } from './desktop.js';
+import { hasPedalArt, pedalThumb, PEDAL_THUMB_POS, pedalArtHtml, mountPedalArt } from './pedal-art.js';
 
 const CELL_PX = 20;
 const TILE_W = 140;
@@ -202,6 +203,7 @@ export function mount(container, ctx) {
   let confirmDeleteOpen = false;
   let renaming = false;
   let activeInteraction = null;
+  let artCtl = null;
 
   const viewStateByPreset = new Map();
   const faderRafs = new Map();
@@ -486,6 +488,11 @@ export function mount(container, ctx) {
       const inputs = bt?.inputs || (node.type === 'mixer' ? 2 : 1);
       const summary = getNodeSummary(node, bt);
 
+      const hasArt = hasPedalArt(node.type);
+      const artStyle = hasArt
+        ? `--art:url(${pedalThumb(node.type)});--art-pos:${PEDAL_THUMB_POS[node.type] || 'center'};`
+        : '';
+
       const inJacksHtml = inputs >= 2
         ? `
           <div class="pb-jack is-in is-port-a" data-uid="${escapeHtml(node.uid)}" data-dir="in" data-port="0" title="Input A"><span class="pb-jack-lbl">A</span></div>
@@ -494,10 +501,10 @@ export function mount(container, ctx) {
         : `<div class="pb-jack is-in" data-uid="${escapeHtml(node.uid)}" data-dir="in" data-port="0" title="Input jack"></div>`;
 
       return `
-        <div class="pb-tile${isEnabled ? '' : ' is-off'}${isSelected ? ' is-selected' : ''}${isDisconnected ? ' is-disconnected' : ''}"
+        <div class="pb-tile${isEnabled ? '' : ' is-off'}${isSelected ? ' is-selected' : ''}${isDisconnected ? ' is-disconnected' : ''}${hasArt ? ' has-art' : ''}"
           data-uid="${escapeHtml(node.uid)}" tabindex="0" aria-label="${escapeHtml(name)} tile"
           ${isDisconnected ? 'title="Not connected"' : ''}
-          style="left:${node.x * CELL_PX}px;top:${node.y * CELL_PX}px;--cat:${catColor};">
+          style="left:${node.x * CELL_PX}px;top:${node.y * CELL_PX}px;--cat:${catColor};${artStyle}">
           <div class="pb-tile-head">
             <button type="button" class="stomp pb-stomp${isEnabled ? ' is-on' : ''}" data-uid="${escapeHtml(node.uid)}"
               aria-label="Toggle ${escapeHtml(name)}" aria-pressed="${isEnabled ? 'true' : 'false'}" title="${isEnabled ? 'Bypass' : 'Enable'}"></button>
@@ -815,6 +822,7 @@ export function mount(container, ctx) {
         <button type="button" class="btn btn-sm btn-ghost pb-insp-close" id="pb-insp-close" aria-label="Close inspector">×</button>
       </div>
       <div class="pb-insp-body">
+        ${hasPedalArt(node.type) ? `<div class="pb-insp-art" id="pb-insp-art">${pedalArtHtml(node.type)}</div>` : ''}
         ${fileRowHtml}
         ${fadersHtml}
         ${optionsHtml}
@@ -1615,6 +1623,7 @@ export function mount(container, ctx) {
         const v = parseFloat(slider.value);
         if (!node.params) node.params = {};
         node.params[key] = v;
+        if (artCtl && !slider.dataset.fromArt) artCtl.set(key, v);
         if (valEl) valEl.textContent = formatBoardVal(spec, v);
         if (tileSumEl) {
           const sum = getNodeSummary(node, bt);
@@ -1664,6 +1673,30 @@ export function mount(container, ctx) {
         amp.setBlockParam(preset.id, node.uid, key, val);
       });
     });
+
+    artCtl?.destroy?.();
+    artCtl = null;
+    const artRoot = container.querySelector('#pb-insp-art .pa');
+    const artNode = artRoot ? nodes.find((n) => n.uid === selectedUid) : null;
+    if (artNode) {
+      const bt = blockTypeMap.get(artNode.type);
+      artCtl = mountPedalArt(artRoot, {
+        type: artNode.type,
+        specs: bt?.params || [],
+        params: artNode.params || {},
+        enabled: artNode.enabled !== false,
+        onParam(key, value) {
+          const slider = container.querySelector(`.pb-param-slider[data-param-key="${CSS.escape(key)}"]`);
+          if (slider) {
+            slider.dataset.fromArt = '1';
+            slider.value = String(value);
+            slider.dispatchEvent(new Event('input', { bubbles: true }));
+            delete slider.dataset.fromArt;
+          }
+        },
+        onToggle() { container.querySelector('#pb-insp-toggle')?.click(); }
+      });
+    }
   }
 
   // Document-level click to close popovers
@@ -1760,12 +1793,15 @@ export function mount(container, ctx) {
     }
   };
 
+  let lastLiveId = null;
+  const onStatus = () => { const id = getLivePresetId(); if (id !== lastLiveId) { lastLiveId = id; render(); } };
+
   document.addEventListener('click', onDocClick);
   window.addEventListener('keydown', onKeyDown);
   window.addEventListener('hashchange', onHashChange);
   amp.addEventListener('state', render);
   amp.addEventListener('presets', render);
-  amp.addEventListener('status', render);
+  amp.addEventListener('status', onStatus);
   amp.addEventListener('error', onAmpError);
 
   render();
@@ -1777,7 +1813,7 @@ export function mount(container, ctx) {
       window.removeEventListener('hashchange', onHashChange);
       amp.removeEventListener('state', render);
       amp.removeEventListener('presets', render);
-      amp.removeEventListener('status', render);
+      amp.removeEventListener('status', onStatus);
       amp.removeEventListener('error', onAmpError);
       for (const entry of faderRafs.values()) {
         cancelAnimationFrame(entry.id);
