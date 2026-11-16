@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T17:02:24-08:00"
+  "updated": "2026-11-15T17:07:23-08:00"
  },
  "setup": {
-  "version": "2.0.4",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.4/Woodshed-Setup.exe",
-  "sha256": "e77e5aeb3e7434c81701d9da92dc6b5fe72f7cd585a2d15868f640c5f46071bf",
-  "notes": "Woodshed 2.0.4: Check for updates shows what it is doing and the result next to the button; clearer amp and backup texts in the app"
+  "version": "2.0.5",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.5/Woodshed-Setup.exe",
+  "sha256": "4dfd8ba7940e83815601a3346f81eda519034dadce66a3864a7362ba1fca04ee",
+  "notes": "Woodshed 2.0.5: after an update, Woodshed and Woodshed Amp reopen by themselves"
  },
  "amp": {
-  "version": "2.0.4",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.4/woodshed-amp.exe",
-  "sha256": "be0102b55d71bb94f66376d161b9c1dcf3fdc1ba6916662926824f485e028997",
-  "notes": "Woodshed 2.0.4: Check for updates shows what it is doing and the result next to the button; clearer amp and backup texts in the app"
+  "version": "2.0.5",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.5/woodshed-amp.exe",
+  "sha256": "7e76cbe0de5fd2f424f4ee9928fba2246b66b34ffd5b1b641fb0743b2307f8ca",
+  "notes": "Woodshed 2.0.5: after an update, Woodshed and Woodshed Amp reopen by themselves"
  },
  "extension": {
   "version": "1.2.0",

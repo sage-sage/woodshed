@@ -551,11 +551,25 @@ void Updater::installAsync(HWND notify) {
                     std::lock_guard<std::mutex> lock(mutex_);
                     lastError_.clear();
                 }
+                // Tell the installer what to reopen afterwards. This program quits as soon as the installer
+                // starts, so the installer can't see it running itself; the other program is still checked here
+                // too (each holds its single-instance mutex while it runs).
+                std::wstring restart;
+                auto isRunning = [](const wchar_t* mutexName) {
+                    HANDLE h = OpenMutexW(SYNCHRONIZE, FALSE, mutexName);
+                    if (!h) return false;
+                    CloseHandle(h);
+                    return true;
+                };
+                if (isRunning(L"WoodshedAppSingleInstance")) restart += L"app";
+                if (isRunning(L"WoodshedAmpSingleInstance")) restart += restart.empty() ? L"amp" : L",amp";
+                std::wstring params = L"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH";
+                if (!restart.empty()) params += L" /RESTART=" + restart;
                 const HINSTANCE execRes = ShellExecuteW(
                     nullptr,
                     L"open",
                     installerPath.c_str(),
-                    L"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH",
+                    params.c_str(),
                     nullptr,
                     SW_SHOWNORMAL);
                 if (reinterpret_cast<INT_PTR>(execRes) <= 32) {

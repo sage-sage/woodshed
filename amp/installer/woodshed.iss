@@ -170,6 +170,7 @@ end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
 var
+  Restart: string;
   AppDir: string;
   ExePath: string;
   ResultCode: Integer;
@@ -197,15 +198,25 @@ begin
   begin
     if Pos('/RELAUNCH', Uppercase(GetCmdTail)) > 0 then
     begin
-      if WasAppRunning and WizardIsComponentSelected('app') then
-      begin
-        ExePath := AddBackslash(AppDir) + 'woodshed.exe';
-        if FileExists(ExePath) then
-          Exec(ExePath, '', AppDir, SW_SHOWNORMAL, ewNoWait, ResultCode);
-      end;
+      { The updating program quits before setup can see it, so it names what was open in /RESTART=app,amp.
+        Updaters older than 2.0.5 don't send it: then reopen everything that is installed. }
+      Restart := Lowercase(ExpandConstant('{param:RESTART|all}'));
+      if (Restart = 'all') or (Pos('app', Restart) > 0) then WasAppRunning := True;
+      if (Restart = 'all') or (Pos('amp', Restart) > 0) then WasAmpRunning := True;
+      { The amp first: the app starts the amp itself when it finds it not running, and a second copy of the
+        amp would say "already running". }
       if WasAmpRunning and WizardIsComponentSelected('amp') then
       begin
         ExePath := AddBackslash(AppDir) + 'woodshed-amp.exe';
+        if FileExists(ExePath) then
+        begin
+          Exec(ExePath, '', AppDir, SW_SHOWNORMAL, ewNoWait, ResultCode);
+          Sleep(1500);
+        end;
+      end;
+      if WasAppRunning and WizardIsComponentSelected('app') then
+      begin
+        ExePath := AddBackslash(AppDir) + 'woodshed.exe';
         if FileExists(ExePath) then
           Exec(ExePath, '', AppDir, SW_SHOWNORMAL, ewNoWait, ResultCode);
       end;
