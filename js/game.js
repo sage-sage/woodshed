@@ -7,7 +7,7 @@ import { GuitarSynth, GuideScheduler, resolveGuideTone } from './synth.js';
 import { Highway } from './highway.js';
 import { renderFretboard, STRING_COLORS } from './fretboard.js';
 import { resumeAudio } from './audio-context.js';
-import { suggestTone, TONE_NAMES } from './tone-suggest.js';
+import { suggestTone, TONE_NAMES, baseToneId } from './tone-suggest.js';
 
 export class Game {
   constructor(container, ctx, record) {
@@ -1333,7 +1333,7 @@ export class Game {
 
   _applyGuideTone() {
     const setting = this.ctx.settings.get('guideTone');
-    const songToneId = this.record.tone || this.toneSuggestion?.id;
+    const songToneId = baseToneId(this.record.tone || this.toneSuggestion?.id, this.ctx.amp?.presets);
     this.ctx.synth.setTone(resolveGuideTone(setting, songToneId));
   }
 

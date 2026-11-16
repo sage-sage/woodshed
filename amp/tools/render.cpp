@@ -133,7 +133,10 @@ int main(int argc, char** argv) {
         }
         blocks.push_back(std::move(block));
     }
-    chain.installBoard(std::make_shared<wsamp::dsp::Board>(std::move(blocks)));
+    // The preset's own cables (the -nam/-ir overrides keep the block uids, so they still line up).
+    std::vector<wsamp::dsp::Cable> cables;
+    for (const auto& c : preset->cables) cables.push_back({c.from, c.to, c.port});
+    chain.installBoard(std::make_shared<wsamp::dsp::Board>(std::move(blocks), std::move(cables)));
 
     const size_t totalSamples = audio.size();
     size_t numBlocks = 0;

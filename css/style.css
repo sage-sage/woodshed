@@ -1610,3 +1610,40 @@ html.has-titlebar .app-shell { height: calc(100dvh - 35px); }
 html.win-maximized .tb-restore { display: block; }
 html.win-inactive .titlebar-brand, html.win-inactive .titlebar-title, html.win-inactive .tb-btn { opacity: 0.5; }
 html.win-inactive .tb-btn:hover { opacity: 1; }
+
+/* ---- Desktop app: update check screen (js/desktop.js openUpdateDialog) ---- */
+.ws-update-overlay { position: fixed; inset: 0; z-index: 2000; display: grid; place-items: center; background: rgba(10, 8, 7, 0.72); }
+.ws-update-dialog { width: min(520px, calc(100vw - 32px)); background: var(--bg); color: var(--fg); border: 2px solid var(--fg); box-shadow: 8px 8px 0 var(--accent); }
+.ws-update-head { display: flex; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--fg-muted); }
+.ws-update-body { padding: 32px 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; }
+.ws-update-mark { font-size: 52px; line-height: 1; color: var(--accent); }
+.ws-update-overlay[data-state="checking"] .ws-update-mark,
+.ws-update-overlay[data-state="installing"] .ws-update-mark { animation: wsUpdSpin 2.4s linear infinite; }
+.ws-update-overlay[data-state="none"] .ws-update-mark { color: var(--good); }
+.ws-update-overlay[data-state="failed"] .ws-update-mark { color: var(--bad); }
+@keyframes wsUpdSpin { to { transform: rotate(360deg); } }
+.ws-update-title { margin: 0; font-family: var(--font-serif); font-size: 30px; line-height: 1.15; }
+.ws-update-text { margin: 0; max-width: 400px; color: var(--fg-muted); line-height: 1.5; }
+.ws-update-bar { position: relative; width: 100%; height: 8px; background: var(--panel-2); overflow: hidden; }
+.ws-update-bar span { position: absolute; top: 0; left: 0; height: 100%; width: 40%; background: var(--accent); }
+.ws-update-overlay[data-state="checking"] .ws-update-bar span,
+.ws-update-overlay[data-state="installing"] .ws-update-bar span { animation: wsUpdSweep 1.4s ease-in-out infinite; }
+.ws-update-overlay[data-state="none"] .ws-update-bar span,
+.ws-update-overlay[data-state="available"] .ws-update-bar span,
+.ws-update-overlay[data-state="failed"] .ws-update-bar span { width: 100%; }
+.ws-update-overlay[data-state="failed"] .ws-update-bar span { background: var(--bad); }
+.ws-update-overlay[data-state="none"] .ws-update-bar span { background: var(--good); }
+@keyframes wsUpdSweep { from { transform: translateX(-100%); } to { transform: translateX(250%); } }
+.ws-update-steps { list-style: none; margin: 0; padding: 0; width: 100%; display: flex; flex-direction: column; gap: 8px; font-family: var(--font-mono); font-size: 12px; text-align: left; color: var(--fg); }
+.ws-update-steps li { display: flex; justify-content: space-between; gap: 12px; }
+.ws-update-steps li.is-done { color: var(--good); }
+.ws-update-steps li.is-dim { color: var(--fg-muted); opacity: 0.6; }
+.ws-update-steps li.is-bad { color: var(--bad); }
+.ws-update-steps li.is-active { color: var(--accent); }
+.ws-update-foot { display: flex; border-top: 1px solid var(--line); }
+.ws-update-btn { flex: 1; padding: 14px; background: transparent; border: 0; color: var(--fg); font-family: var(--font-body); font-weight: 700; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; cursor: pointer; }
+.ws-update-btn + .ws-update-btn { border-left: 1px solid var(--line); }
+.ws-update-btn.is-primary { background: var(--accent); color: var(--bg); }
+.ws-update-btn:hover { filter: brightness(1.1); }
+.ws-update-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
+@media (prefers-reduced-motion: reduce) { .ws-update-mark, .ws-update-bar span { animation: none !important; } }

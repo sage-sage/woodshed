@@ -1,6 +1,7 @@
 import { TUNINGS, DEMO_SONG_TAB, buildEvents, midiToName } from './song.js';
 import { parseAsciiTab } from './tab-ascii.js';
 import { loadTabFile, TAB_FILE_EXTENSIONS } from './tab-gp.js';
+import { songsterrToSong, describeSongsterr } from './songsterr.js';
 import { parseYouTubeId, createBackend, YOUTUBE_BLOCKED, YOUTUBE_BLOCKED_MSG } from './player.js';
 import { Highway } from './highway.js';
 
@@ -886,6 +887,39 @@ export function mount(container, ctx) {
 
     destroyPreviewBackend();
     state.step = 1;
+
+    if (payload.notation && typeof payload.notation === 'object') {
+      const n = payload.notation;
+      const title = payload.title || n.name || '';
+      const artist = payload.artist || '';
+      try {
+        const described = describeSongsterr(n);
+        songsterrToSong(n, { title, artist });
+        state.tabSourceMode = 'gp';
+        state.gpLoaded = {
+          title,
+          artist,
+          tracks: described.tracks,
+          toSong: () => songsterrToSong(n, { title, artist })
+        };
+        state.gpSelectedTrack = 0;
+        state.gpTitle = title;
+        state.gpArtist = artist;
+        state.gpFileName = `Songsterr: ${n.name || 'track'}`;
+        state.gpError = '';
+        ctx.toast('Tab from Songsterr loaded with exact rhythm — check it and press Next', 'success');
+        return true;
+      } catch (err) {
+        const msg = err && err.message ? err.message : 'Could not read Songsterr rhythm data.';
+        ctx.toast(msg, 'error');
+        if (!payload.text || !payload.text.trim()) {
+          state.tabSourceMode = 'gp';
+          state.gpError = msg;
+          return true;
+        }
+      }
+    }
+
     state.tabSourceMode = 'paste';
     state.asciiText = payload.text || '';
     state.title = payload.title || '';
@@ -898,7 +932,9 @@ export function mount(container, ctx) {
     }
     state.tuningPreset = matchTuningPreset(payload.tuning);
     runAsciiParse();
-    ctx.toast(`Tab from ${payload.source || 'browser'} loaded — check it and press Next`, 'success');
+    if (!payload.notation) {
+      ctx.toast(`Tab from ${payload.source || 'browser'} loaded — check it and press Next`, 'success');
+    }
     return true;
   }
 

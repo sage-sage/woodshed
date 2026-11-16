@@ -88,9 +88,10 @@
     chrome.storage.local.get({ library: [] }, (items) => {
       const library = Array.isArray(items?.library) ? items.library : [];
       if (op === 'list') {
-        const entries = library.map(({ text, ...rest }) => ({
+        const entries = library.map(({ text, notation, ...rest }) => ({
           ...rest,
-          textLength: typeof text === 'string' ? text.length : 0
+          textLength: typeof text === 'string' ? text.length : 0,
+          hasNotation: Boolean(notation && typeof notation === 'object' && notation.format === 'songsterr' && Array.isArray(notation.measures))
         }));
         window.postMessage(
           {

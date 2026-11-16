@@ -8,13 +8,14 @@ import { GuitarSynth } from './synth.js';
 import * as store from './store.js';
 import { mount as mountGame } from './game.js';
 import { mount as mountTuner } from './tuner.js';
+import { mount as mountPedalboard } from './pedalboard.js';
 import { mount as mountImport } from './import.js';
 import { mount as mountLearn } from './learn.js';
 import { mount as mountSync } from './sync-ui.js';
 import { mount as mountSetup } from './setup.js';
 import { runCalibration } from './calibrate.js';
 import { fetchLatest, compareVersions } from './updates.js';
-import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates, mountTitleBar, updateState, installUpdate, postToHost } from './desktop.js';
+import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates, mountTitleBar, updateState, installUpdate, postToHost, openUpdateDialog } from './desktop.js';
 import {
   detectTabLibrary,
   getExtensionVersion,
@@ -34,15 +35,33 @@ let currentRecord = null;
 let pendingTabImport = null;
 
 const MAX_IMPORT_STR_BYTES = 1024 * 1024; // long Songsterr reads can pass 200 KB
+const MAX_IMPORT_NOTATION_BYTES = 4 * 1024 * 1024;
 
 function isValidStr(val, maxLen = MAX_IMPORT_STR_BYTES) {
   return typeof val === 'string' && new TextEncoder().encode(val).length <= maxLen;
 }
 
+function isValidSongsterrNotation(val) {
+  if (!val || typeof val !== 'object' || Array.isArray(val)) return false;
+  if (Object.prototype.toString.call(val) !== '[object Object]') return false;
+  if (val.format !== 'songsterr') return false;
+  try {
+    return JSON.stringify(val).length <= MAX_IMPORT_NOTATION_BYTES;
+  } catch (_err) {
+    return false;
+  }
+}
+
 function acceptTabImport(p, { ack = false } = {}) {
   if (!p || typeof p !== 'object') return false;
   if (typeof p.ts !== 'number' || !Number.isFinite(p.ts)) return false;
-  if (!isValidStr(p.text) || !p.text.trim()) return false;
+  const hasNotation = p.notation !== undefined && p.notation !== null;
+  if (hasNotation && !isValidSongsterrNotation(p.notation)) return false;
+  if (hasNotation) {
+    if (p.text !== undefined && !isValidStr(p.text)) return false;
+  } else if (!isValidStr(p.text) || !p.text.trim()) {
+    return false;
+  }
   if (p.title !== undefined && !isValidStr(p.title)) return false;
   if (p.artist !== undefined && !isValidStr(p.artist)) return false;
   if (p.tuning !== undefined && !isValidStr(p.tuning)) return false;
@@ -58,7 +77,8 @@ function acceptTabImport(p, { ack = false } = {}) {
     tuning: p.tuning || '',
     capo: p.capo ?? null,
     bpm: p.bpm ?? null,
-    text: p.text,
+    text: typeof p.text === 'string' ? p.text : '',
+    ...(hasNotation ? { notation: p.notation } : {}),
     source: p.source || 'web',
     url: p.url || '',
     ts: p.ts
@@ -460,6 +480,7 @@ function mountLibrary(container) {
             capo: typeof full.capo === 'number' && full.capo >= 0 && full.capo <= 24 ? full.capo : null,
             bpm: typeof full.bpm === 'number' && full.bpm >= 20 && full.bpm <= 400 ? full.bpm : null,
             text: full.text,
+            ...(full.notation ? { notation: full.notation } : {}),
             source: full.site || 'web',
             url: full.url,
             ts: Date.now()
@@ -1015,7 +1036,7 @@ function mountSettings(container) {
   };
   updBtn?.addEventListener('click', () => {
     if (updateState.status === 'available') installUpdate();
-    else checkDesktopUpdate?.();
+    else { openUpdateDialog(checkDesktopUpdate); checkDesktopUpdate?.(); }
   });
   if (updBtn) {
     window.addEventListener('woodshed-update', renderUpdate);
@@ -1341,9 +1362,32 @@ function mountSettings(container) {
       ['presence', 'Presence']
     ];
 
+    const hasGraph = presetList.some((p) => Boolean(p && p.graph));
     const presetsHtml = presetList.map((p) => {
       const isCurrent = p.id === currentPresetId;
       const hasBoard = Boolean(blockTypes && p.board && Array.isArray(p.board.blocks));
+
+      if (hasGraph) {
+        const blocks = Array.isArray(p.board?.blocks) ? p.board.blocks : [];
+        const pillsHtml = blocks.map((blk, i) => {
+          const bt = blockTypeMap.get(blk.type);
+          const baseName = bt?.name || blk.type;
+          const pillText = blk.file ? blk.file : baseName;
+          const isOff = blk.enabled === false;
+          return `${i > 0 ? '<span class="chain-sep" aria-hidden="true">›</span>' : ''}<span class="chain-pill${isOff ? ' is-off' : ''}${blk.file ? ' is-file' : ''}" title="${escapeHtml(blk.file ? `${baseName}: ${blk.file}` : baseName)}">${escapeHtml(pillText)}</span>`;
+        }).join('');
+
+        return `
+          <div class="amp-preset${isCurrent ? ' is-active' : ''}" data-id="${escapeHtml(p.id)}">
+            <div class="amp-preset-head" style="cursor:default;">
+              <strong class="amp-preset-name">${escapeHtml(p.name || p.id)}</strong>
+              ${isCurrent ? '<span class="chip chip-accent">Active</span>' : `<button type="button" class="btn btn-sm btn-ghost amp-select-preset" data-id="${escapeHtml(p.id)}">Select</button>`}
+              <span class="amp-preset-summary"><span class="chain-pills">${pillsHtml || '<span class="chain-pill is-off">Empty chain</span>'}</span></span>
+              <a href="#/pedalboard?preset=${escapeHtml(encodeURIComponent(p.id))}" class="btn btn-sm btn-ghost">Edit</a>
+            </div>
+          </div>
+        `;
+      }
 
       if (hasBoard) {
         const board = p.board;
@@ -1633,7 +1677,10 @@ function mountSettings(container) {
       <p style="margin:-6px 0 14px;font-size:0.8rem;color:var(--text-muted);">${escapeHtml(monitorNote)}${st.bufferNote ? ` ${escapeHtml(st.bufferNote)}` : ''}</p>
 
       <div>
-        <span class="stat-label">Presets</span>
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;">
+          <span class="stat-label">Presets</span>
+          ${hasGraph ? '<a href="#/pedalboard" class="btn btn-sm btn-primary">Open Pedalboard</a>' : ''}
+        </div>
         <div class="amp-preset-list">${presetsHtml || '<p class="empty-state">No presets reported by Woodshed Amp.</p>'}</div>
       </div>
     `;
@@ -1722,7 +1769,7 @@ function mountSettings(container) {
       });
     });
 
-    if (blockTypes) {
+    if (blockTypes && !hasGraph) {
       let activeAddMenu = null;
 
       const closeAllMenus = () => {
@@ -2113,7 +2160,7 @@ async function handleRouteChange() {
     currentViewInstance = null;
   }
 
-  mainEl.classList.remove('play-mode-view');
+  mainEl.classList.remove('play-mode-view', 'pedalboard-view');
   document.getElementById('modal-root')?.classList.add('hidden');
 
   // Update active rail link
@@ -2150,6 +2197,9 @@ async function handleRouteChange() {
 
   if (hash.startsWith('#/tuner')) {
     currentViewInstance = mountTuner(mainEl, ctx);
+  } else if (hash.startsWith('#/pedalboard')) {
+    mainEl.classList.add('pedalboard-view');
+    currentViewInstance = mountPedalboard(mainEl, ctx);
   } else if (hash.startsWith('#/settings')) {
     currentViewInstance = mountSettings(mainEl, ctx);
   } else if (hash.startsWith('#/import')) {

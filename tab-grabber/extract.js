@@ -1319,6 +1319,201 @@
     return frame().then(frame).then(() => new Promise((resolve) => setTimeout(resolve, ms)));
   }
 
+  const NOTATION_SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+  function midiToSharpName(midi) {
+    const m = Math.round(Number(midi));
+    return NOTATION_SHARP_NAMES[((m % 12) + 12) % 12];
+  }
+
+  function escapeRegExpStr(str) {
+    return String(str).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  }
+
+  function parseSongsterrPageState() {
+    try {
+      const el = document.getElementById('state');
+      if (!el || !el.textContent) return null;
+      const parsed = JSON.parse(el.textContent);
+      return parsed && typeof parsed === 'object' ? parsed : null;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  function compactSongsterrNotation(raw, songId, revisionId, partId) {
+    const tuning = raw.tuning.map((n) => Number(n));
+    const strings = Number.isInteger(raw.strings) ? raw.strings : tuning.length;
+    const rawTempo = Array.isArray(raw.automations?.tempo) ? raw.automations.tempo : [];
+    const tempo = rawTempo
+      .filter((t) => t && typeof t === 'object' && Number.isFinite(t.bpm))
+      .map((t) => ({
+        measure: Number.isFinite(t.measure) ? t.measure : 0,
+        position: Number.isFinite(t.position) ? t.position : 0,
+        bpm: t.bpm,
+        ...(t.type !== undefined ? { type: t.type } : {})
+      }));
+
+    const measures = raw.measures.map((m) => {
+      const src = m && typeof m === 'object' ? m : {};
+      const outM = {};
+      if (Array.isArray(src.signature) && src.signature.length >= 2) {
+        outM.signature = [Number(src.signature[0]), Number(src.signature[1])];
+      }
+      if (src.marker && typeof src.marker === 'object' && typeof src.marker.text === 'string') {
+        outM.marker = { text: src.marker.text };
+      }
+      if (src.rest) outM.rest = true;
+      if (src.repeatStart) outM.repeatStart = true;
+      if (src.repeatClose) {
+        outM.repeatClose = typeof src.repeatClose === 'number' ? src.repeatClose : true;
+      }
+      if (Array.isArray(src.alternateEnding) && src.alternateEnding.length > 0) {
+        outM.alternateEnding = src.alternateEnding.filter((x) => Number.isInteger(x));
+      }
+      outM.voices = Array.isArray(src.voices)
+        ? src.voices.map((v) => {
+            const srcV = v && typeof v === 'object' ? v : {};
+            const outV = {};
+            if (srcV.rest) outV.rest = true;
+            outV.beats = Array.isArray(srcV.beats)
+              ? srcV.beats.map((b) => {
+                  const srcB = b && typeof b === 'object' ? b : {};
+                  const outB = {
+                    duration: Array.isArray(srcB.duration) && srcB.duration.length >= 2
+                      ? [Number(srcB.duration[0]), Number(srcB.duration[1])]
+                      : [1, 4]
+                  };
+                  if (Number.isFinite(srcB.dots) && srcB.dots > 0) outB.dots = srcB.dots;
+                  if (Number.isFinite(srcB.tuplet) && srcB.tuplet > 1) outB.tuplet = srcB.tuplet;
+                  if (srcB.rest) outB.rest = true;
+                  if (srcB.vibrato) outB.vibrato = true;
+                  if (srcB.graceNote) outB.graceNote = true;
+                  outB.notes = Array.isArray(srcB.notes)
+                    ? srcB.notes.map((n) => {
+                        const srcN = n && typeof n === 'object' ? n : {};
+                        const outN = {
+                          string: Number(srcN.string),
+                          fret: Number.isFinite(srcN.fret) ? srcN.fret : 0
+                        };
+                        if (srcN.tie) outN.tie = true;
+                        if (srcN.dead) outN.dead = true;
+                        if (srcN.ghost) outN.ghost = true;
+                        if (srcN.slide) outN.slide = srcN.slide;
+                        if (srcN.vibrato) outN.vibrato = true;
+                        if (srcN.hp) outN.hp = true;
+                        if (srcN.bend) outN.bend = srcN.bend;
+                        if (srcN.harmonic) outN.harmonic = srcN.harmonic;
+                        if (srcN.rest) outN.rest = true;
+                        return outN;
+                      })
+                    : [];
+                  return outB;
+                })
+              : [];
+            return outV;
+          })
+        : [];
+      return outM;
+    });
+
+    return {
+      format: 'songsterr',
+      version: 1,
+      songId: Number.isFinite(Number(songId)) ? Number(songId) : songId,
+      revisionId,
+      partId: Number.isFinite(Number(partId)) ? Number(partId) : partId,
+      name: typeof raw.name === 'string' ? raw.name : '',
+      instrument: typeof raw.instrument === 'string' ? raw.instrument : '',
+      instrumentId: Number.isFinite(raw.instrumentId) ? raw.instrumentId : null,
+      strings,
+      tuning,
+      automations: { tempo },
+      measures
+    };
+  }
+
+  async function readSongsterrNotation(url, title, artist) {
+    try {
+      const pageState = parseSongsterrPageState();
+      const stateMeta = pageState && typeof pageState.meta === 'object' ? pageState.meta : {};
+      let songId = stateMeta.songId ?? pageState?.song?.songId ?? null;
+      if (songId === null || songId === undefined || songId === '') {
+        const urlMatch = String(url || window.location.href || '').match(/-s(\d+)/);
+        if (urlMatch) songId = urlMatch[1];
+      }
+      if (songId === null || songId === undefined || songId === '') return null;
+
+      // The shown track: Songsterr puts it in the address ("...-s53923t2" = track 2) once you switch tracks;
+      // otherwise the rendered tab carries data-part-id, else the page state's initial part.
+      const urlTrack = String(url || window.location.href || '').match(/-s\d+t(\d+)(?:[/?#]|$)/);
+      const partEl = document.querySelector('[data-line] [data-part-id], [data-part-id][data-line], [data-part-id]');
+      const attrPartId = partEl ? partEl.getAttribute('data-part-id') : null;
+      const partId = urlTrack
+        ? urlTrack[1]
+        : (attrPartId !== null && attrPartId.trim() !== '' ? attrPartId.trim() : String(stateMeta.partId ?? 0));
+
+      const entries = typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function'
+        ? performance.getEntriesByType('resource')
+        : [];
+      const pathRe = new RegExp(`^/${escapeRegExpStr(songId)}/(\\d+)/[^/]+/${escapeRegExpStr(partId)}\\.json$`);
+      let matchedUrl = null;
+      let revisionId = null;
+
+      for (let i = entries.length - 1; i >= 0; i--) {
+        const name = entries[i] && entries[i].name;
+        if (typeof name !== 'string') continue;
+        try {
+          const parsedUrl = new URL(name);
+          if (!parsedUrl.hostname.toLowerCase().endsWith('cloudfront.net')) continue;
+          const m = parsedUrl.pathname.match(pathRe);
+          if (m) {
+            matchedUrl = name;
+            revisionId = parseInt(m[1], 10);
+            break;
+          }
+        } catch (_err) {
+          // ignore non-URL resource entry
+        }
+      }
+      if (!matchedUrl) return null;
+
+      const resp = await fetch(matchedUrl, { credentials: 'omit', cache: 'force-cache' });
+      if (!resp.ok) return null;
+      const raw = await resp.json();
+      if (!raw || typeof raw !== 'object') return null;
+      if (!Array.isArray(raw.measures) || raw.measures.length === 0) return null;
+      if (!Array.isArray(raw.tuning) || raw.tuning.length === 0) return null;
+
+      const notation = compactSongsterrNotation(raw, songId, revisionId, partId);
+      const toAscii = globalThis.WoodshedNotation?.notationToAscii || globalThis.WoodshedSongsterr?.notationToAscii;
+      const text = typeof toAscii === 'function' ? toAscii(notation) : '';
+      if (!text || !text.trim()) return null;
+
+      const firstTempo = notation.automations.tempo[0]?.bpm;
+      const bpm = Number.isFinite(firstTempo) ? firstTempo : null;
+      const tuning = notation.tuning.map((m) => midiToSharpName(m)).join(' ');
+      const trackName = notation.name || 'Track 1';
+
+      return {
+        ok: true,
+        site: 'Songsterr',
+        url,
+        title,
+        artist,
+        tuning,
+        capo: null,
+        bpm,
+        kind: 'tab',
+        text,
+        notation,
+        warning: `Exact rhythm from Songsterr (track: ${trackName}).`
+      };
+    } catch (_err) {
+      return null;
+    }
+  }
+
   async function readSongsterr(defaultMeta, url) {
     let title = defaultMeta.title;
     let artist = defaultMeta.artist;
@@ -1327,6 +1522,19 @@
       if (titleMatch[1].trim()) title = titleMatch[1].trim();
       if (titleMatch[2].trim()) artist = titleMatch[2].trim();
     }
+
+    const exactResult = await readSongsterrNotation(url, title, artist);
+    if (exactResult) return exactResult;
+
+    const svgResult = await readSongsterrSvg(defaultMeta, url, title, artist);
+    if (svgResult && svgResult.ok) {
+      const note = 'Exact rhythm unavailable; rhythm was estimated from the drawing.';
+      svgResult.warning = svgResult.warning ? `${svgResult.warning} ${note}` : note;
+    }
+    return svgResult;
+  }
+
+  async function readSongsterrSvg(defaultMeta, url, title, artist) {
 
     if (getSongsterrLineSvgs().length === 0) {
       return {

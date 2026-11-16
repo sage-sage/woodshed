@@ -272,10 +272,145 @@
     return systems.join('\n\n');
   }
 
+  const NOTATION_SHARP_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B'];
+
+  function midiToSharpNoteName(midi) {
+    if (!Number.isFinite(midi)) return 'E';
+    const m = Math.round(midi);
+    return NOTATION_SHARP_NAMES[((m % 12) + 12) % 12];
+  }
+
+  function notationTupletRatio(tuplet) {
+    if (!Number.isInteger(tuplet) || tuplet < 2) return 1;
+    const p = 1 << Math.floor(Math.log2(tuplet - 1));
+    return p / tuplet;
+  }
+
+  function notationBeatWhole(beat) {
+    if (!beat || !Array.isArray(beat.duration) || beat.duration.length < 2) return 0;
+    const n = Number(beat.duration[0]);
+    const d = Number(beat.duration[1]);
+    if (!Number.isFinite(n) || !Number.isFinite(d) || n <= 0 || d <= 0) return 0;
+    return n / d;
+  }
+
+  function notationToAscii(notation) {
+    if (!notation || typeof notation !== 'object' || !Array.isArray(notation.measures)) {
+      return '';
+    }
+    const rawTuning = Array.isArray(notation.tuning) && notation.tuning.length > 0
+      ? notation.tuning
+      : [64, 59, 55, 50, 45, 40];
+    const stringCount = rawTuning.length;
+    const labels = rawTuning.map((m) => midiToSharpNoteName(m));
+    if (labels.length >= 2 && labels[0] === 'E' && labels[labels.length - 1] === 'E') {
+      labels[0] = 'e';
+    }
+    const labelWidth = labels.reduce((max, lbl) => Math.max(max, lbl.length), 1);
+    const paddedLabels = labels.map((lbl) => lbl.padEnd(labelWidth, ' '));
+
+    let curNum = 4;
+    let curDen = 4;
+    const renderedMeasures = [];
+
+    for (const measure of notation.measures) {
+      const m = measure || {};
+      if (
+        Array.isArray(m.signature) &&
+        m.signature.length >= 2 &&
+        Number.isFinite(m.signature[0]) &&
+        m.signature[0] > 0 &&
+        Number.isFinite(m.signature[1]) &&
+        m.signature[1] > 0
+      ) {
+        curNum = Math.round(m.signature[0]);
+        curDen = Math.round(m.signature[1]);
+      }
+      const measureWhole = curNum / curDen;
+      const voice = Array.isArray(m.voices) ? m.voices[0] : null;
+      const beats = voice && Array.isArray(voice.beats)
+        ? voice.beats.filter((b) => b && !b.graceNote)
+        : [];
+
+      const rows = Array.from({ length: stringCount }, () => '');
+
+      if (beats.length === 0) {
+        const cols = Math.max(2, Math.round(1 + 16 * measureWhole));
+        for (let s = 0; s < stringCount; s++) {
+          rows[s] = '-'.repeat(cols);
+        }
+        renderedMeasures.push(rows);
+        continue;
+      }
+
+      const rawDurs = beats.map((b) => notationBeatWhole(b));
+      const hasTuplet = beats.some((b) => Number.isInteger(b.tuplet) && b.tuplet >= 2);
+      let effDurs = rawDurs;
+      // Songsterr durations already include tuplets ([1,12] = triplet eighth); scale only when the raw
+      // values do not fill the bar and the scaled ones do (older files).
+      const rawSum = rawDurs.reduce((acc, v) => acc + v, 0);
+      if (hasTuplet && Math.abs(rawSum - measureWhole) >= 1e-6) {
+        const adj = beats.map((b, idx) => rawDurs[idx] * notationTupletRatio(b.tuplet));
+        const adjSum = adj.reduce((acc, v) => acc + v, 0);
+        if (Math.abs(adjSum - measureWhole) < 1e-6) {
+          effDurs = adj;
+        }
+      }
+
+      for (let bIdx = 0; bIdx < beats.length; bIdx++) {
+        const beat = beats[bIdx];
+        const w = effDurs[bIdx] > 0 ? effDurs[bIdx] : (measureWhole / beats.length);
+        const propCols = Math.max(2, Math.round(1 + 16 * w));
+        const tokensByString = Array(stringCount).fill('');
+        let maxTokenLen = 0;
+
+        if (!beat.rest && Array.isArray(beat.notes)) {
+          for (const note of beat.notes) {
+            if (!note || note.rest) continue;
+            const s = note.string;
+            if (!Number.isInteger(s) || s < 0 || s >= stringCount) continue;
+            if (tokensByString[s]) continue;
+            const base = note.dead
+              ? 'x'
+              : String(Number.isFinite(note.fret) ? Math.max(0, Math.round(note.fret)) : 0);
+            const tok = note.tie ? `(${base})` : base;
+            tokensByString[s] = tok;
+            if (tok.length > maxTokenLen) maxTokenLen = tok.length;
+          }
+        }
+
+        const groupWidth = Math.max(propCols, maxTokenLen > 0 ? maxTokenLen + 1 : 2);
+        for (let s = 0; s < stringCount; s++) {
+          const tok = tokensByString[s];
+          rows[s] += tok ? tok.padEnd(groupWidth, '-') : '-'.repeat(groupWidth);
+        }
+      }
+
+      renderedMeasures.push(rows);
+    }
+
+    const systems = [];
+    for (let start = 0; start < renderedMeasures.length; start += 4) {
+      const chunk = renderedMeasures.slice(start, start + 4);
+      const sysRows = paddedLabels.map((lbl, s) => {
+        const cells = chunk.map((mRows) => mRows[s]);
+        return `${lbl}|${cells.join('|')}|`;
+      });
+      systems.push(sysRows.join('\n'));
+    }
+
+    return systems.join('\n\n');
+  }
+
+  globalThis.WoodshedNotation = {
+    notationToAscii
+  };
+
   globalThis.WoodshedSongsterr = {
     DIGIT_TEMPLATES,
     classifyGlyph,
     beatDurations,
-    buildAscii
+    buildAscii,
+    notationToAscii
   };
 })();

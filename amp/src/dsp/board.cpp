@@ -2,6 +2,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <queue>
+#include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 #include "Effects/autowah.h"
@@ -28,6 +31,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "amp",
             "Amp",
             "amp",
+            1,
             false,
             nullptr,
             {
@@ -46,6 +50,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "nam",
             "NAM capture",
             "amp",
+            1,
             true,
             "nam",
             {
@@ -57,6 +62,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "cab",
             "Cabinet",
             "cab",
+            1,
             false,
             nullptr,
             {
@@ -69,6 +75,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "ir",
             "Cabinet IR",
             "cab",
+            1,
             true,
             "ir",
             {
@@ -80,6 +87,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "eq",
             "EQ",
             "eq",
+            1,
             false,
             nullptr,
             {
@@ -93,6 +101,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "overdrive",
             "Overdrive",
             "drive",
+            1,
             false,
             nullptr,
             {
@@ -105,6 +114,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "chorus",
             "Chorus",
             "modulation",
+            1,
             false,
             nullptr,
             {
@@ -120,6 +130,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "flanger",
             "Flanger",
             "modulation",
+            1,
             false,
             nullptr,
             {
@@ -135,6 +146,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "phaser",
             "Phaser",
             "modulation",
+            1,
             false,
             nullptr,
             {
@@ -151,6 +163,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "tremolo",
             "Tremolo",
             "modulation",
+            1,
             false,
             nullptr,
             {
@@ -164,6 +177,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "autowah",
             "Auto-wah",
             "modulation",
+            1,
             false,
             nullptr,
             {
@@ -177,6 +191,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "delay",
             "Delay",
             "time",
+            1,
             false,
             nullptr,
             {
@@ -191,6 +206,7 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             "reverb",
             "Reverb",
             "time",
+            1,
             false,
             nullptr,
             {
@@ -198,6 +214,31 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
                 {"size", "Size", 0.0f, 1.0f, 0.5f, 0.01f, "", {}},
                 {"tone", "Tone", 0.0f, 1.0f, 0.5f, 0.01f, "", {}},
                 {"mix", "Mix", 0.0f, 1.0f, 0.25f, 0.01f, "", {}},
+            },
+        },
+        {
+            BlockType::Mixer,
+            "mixer",
+            "Mixer",
+            "utility",
+            2,
+            false,
+            nullptr,
+            {
+                {"balance", "A / B", 0.0f, 1.0f, 0.5f, 0.01f, "", {}},
+                {"level", "Level", -24.0f, 12.0f, 0.0f, 0.5f, "dB", {}},
+            },
+        },
+        {
+            BlockType::Volume,
+            "volume",
+            "Volume",
+            "utility",
+            1,
+            false,
+            nullptr,
+            {
+                {"level", "Level", -60.0f, 12.0f, 0.0f, 0.5f, "dB", {}},
             },
         },
     };
@@ -254,6 +295,18 @@ bool Block::loadFile(const std::filesystem::path&, std::string& errorOut) {
 }
 
 void Block::clearFile() {}
+
+void Block::processMulti(const float* const* ins, int numIns, float* out, int n) noexcept {
+    if (out == nullptr || n <= 0) return;
+    if (ins != nullptr && numIns > 0 && ins[0] != nullptr) {
+        if (ins[0] != out) {
+            std::copy_n(ins[0], n, out);
+        }
+    } else {
+        std::fill_n(out, n, 0.0f);
+    }
+    process(out, n);
+}
 
 namespace {
 
@@ -922,6 +975,88 @@ private:
     bool applied_ = false;
 };
 
+class MixerBlock final : public Block {
+public:
+    explicit MixerBlock(std::string uid) : Block(BlockType::Mixer, std::move(uid)) {}
+
+    void prepare(double sampleRate, int maxBlock) override {
+        blockPrepared(sampleRate, maxBlock);
+        applied_ = false;
+    }
+
+    void reset() noexcept override {
+        smoother_.snapped = false;
+        applied_ = false;
+    }
+
+    void process(float* io, int n) noexcept override {
+        if (io == nullptr || n <= 0) return;
+        const float* ins[2] = {io, nullptr};
+        processMulti(ins, 2, io, n);
+    }
+
+    void processMulti(const float* const* ins, int numIns, float* out, int n) noexcept override {
+        if (out == nullptr || n <= 0) return;
+        if (smoother_.smooth(targets_, spec().params, preparedRate_, n, !applied_)) {
+            const float bal = std::clamp(smoother_.cur[0], 0.0f, 1.0f);
+            const double angle = static_cast<double>(bal) * 1.57079632679489661923;
+            const float gainA = (bal <= 0.0f) ? 1.0f : (bal >= 1.0f ? 0.0f : static_cast<float>(std::cos(angle)));
+            const float gainB = (bal <= 0.0f) ? 0.0f : (bal >= 1.0f ? 1.0f : static_cast<float>(std::sin(angle)));
+            const float levelGain = dbToGain(smoother_.cur[1]);
+            totalA_ = gainA * levelGain;
+            totalB_ = gainB * levelGain;
+            applied_ = true;
+        }
+
+        const float* inA = (ins != nullptr && numIns >= 1) ? ins[0] : nullptr;
+        const float* inB = (ins != nullptr && numIns >= 2) ? ins[1] : nullptr;
+        for (int i = 0; i < n; ++i) {
+            const float a = (inA != nullptr) ? inA[i] : 0.0f;
+            const float b = (inB != nullptr) ? inB[i] : 0.0f;
+            out[i] = a * totalA_ + b * totalB_;
+        }
+    }
+
+private:
+    ParamSmoother smoother_;
+    float totalA_ = 0.70710678f;
+    float totalB_ = 0.70710678f;
+    bool applied_ = false;
+};
+
+class VolumeBlock final : public Block {
+public:
+    explicit VolumeBlock(std::string uid) : Block(BlockType::Volume, std::move(uid)) {}
+
+    void prepare(double sampleRate, int maxBlock) override {
+        blockPrepared(sampleRate, maxBlock);
+        applied_ = false;
+    }
+
+    void reset() noexcept override {
+        smoother_.snapped = false;
+        applied_ = false;
+    }
+
+    void process(float* io, int n) noexcept override {
+        if (io == nullptr || n <= 0) return;
+        if (smoother_.smooth(targets_, spec().params, preparedRate_, n, !applied_)) {
+            levelGain_ = dbToGain(smoother_.cur[0]);
+            applied_ = true;
+        }
+        if (std::abs(levelGain_ - 1.0f) > 1e-6f) {
+            for (int i = 0; i < n; ++i) {
+                io[i] *= levelGain_;
+            }
+        }
+    }
+
+private:
+    ParamSmoother smoother_;
+    float levelGain_ = 1.0f;
+    bool applied_ = false;
+};
+
 } // namespace
 
 std::shared_ptr<Block> makeBlock(BlockType type, const std::string& uid) {
@@ -939,35 +1074,265 @@ std::shared_ptr<Block> makeBlock(BlockType type, const std::string& uid) {
         case BlockType::Autowah:   return std::make_shared<AutowahBlock>(uid);
         case BlockType::Delay:     return std::make_shared<DelayBlock>(uid);
         case BlockType::Reverb:    return std::make_shared<ReverbBlock>(uid);
+        case BlockType::Mixer:     return std::make_shared<MixerBlock>(uid);
+        case BlockType::Volume:    return std::make_shared<VolumeBlock>(uid);
     }
     return std::make_shared<AmpBlock>(uid);
 }
 
-Board::Board(std::vector<std::shared_ptr<Block>> blocks)
+Board::Board(std::vector<std::shared_ptr<Block>> blocks, std::vector<Cable> cables)
     : blocks_(std::move(blocks)) {
-    raw_.reserve(blocks_.size());
-    for (const auto& b : blocks_) {
-        if (b) {
-            raw_.push_back(b.get());
+    std::unordered_map<std::string, int> uidToIdx;
+    uidToIdx.reserve(blocks_.size());
+    for (size_t i = 0; i < blocks_.size(); ++i) {
+        if (!blocks_[i]) {
+            valid_ = false;
+            continue;
+        }
+        const std::string& uid = blocks_[i]->uid();
+        if (uid.empty() || uid == kInputUid || uid == kOutputUid || uidToIdx.count(uid) > 0) {
+            valid_ = false;
+            continue;
+        }
+        uidToIdx.emplace(uid, static_cast<int>(i));
+    }
+
+    std::unordered_set<std::string> seenCables;
+    seenCables.reserve(cables.size());
+    std::vector<Cable> cleanCables;
+    cleanCables.reserve(cables.size());
+
+    for (const auto& c : cables) {
+        if (c.to == kInputUid || c.from == kOutputUid) {
+            valid_ = false;
+            continue;
+        }
+        if (c.from != kInputUid && uidToIdx.count(c.from) == 0) {
+            valid_ = false;
+            continue;
+        }
+        if (c.to == kOutputUid) {
+            if (c.port != 0) {
+                valid_ = false;
+                continue;
+            }
+        } else {
+            auto it = uidToIdx.find(c.to);
+            if (it == uidToIdx.end()) {
+                valid_ = false;
+                continue;
+            }
+            const int maxInputs = blocks_[static_cast<size_t>(it->second)]->spec().inputs;
+            if (c.port < 0 || c.port >= maxInputs) {
+                valid_ = false;
+                continue;
+            }
+        }
+
+        std::string dedupKey = c.from;
+        dedupKey.push_back(char(0));
+        dedupKey += c.to;
+        dedupKey.push_back(char(0));
+        dedupKey += std::to_string(c.port);
+        if (!seenCables.insert(std::move(dedupKey)).second) {
+            valid_ = false;
+            continue;
+        }
+
+        cleanCables.push_back(c);
+    }
+
+    const int numBlocks = static_cast<int>(blocks_.size());
+    const int inNode = numBlocks;
+    const int outNode = numBlocks + 1;
+    const int totalNodes = numBlocks + 2;
+
+    auto nodeOf = [&](const std::string& uid) -> int {
+        if (uid == kInputUid) return inNode;
+        if (uid == kOutputUid) return outNode;
+        return uidToIdx.at(uid);
+    };
+
+    std::vector<int> topo;
+    while (true) {
+        std::vector<std::vector<int>> fwd(static_cast<size_t>(totalNodes));
+        std::vector<std::vector<int>> rev(static_cast<size_t>(totalNodes));
+        for (const auto& c : cleanCables) {
+            const int u = nodeOf(c.from);
+            const int v = nodeOf(c.to);
+            fwd[static_cast<size_t>(u)].push_back(v);
+            rev[static_cast<size_t>(v)].push_back(u);
+        }
+
+        std::vector<bool> fromIn(static_cast<size_t>(totalNodes), false);
+        {
+            std::queue<int> q;
+            fromIn[static_cast<size_t>(inNode)] = true;
+            q.push(inNode);
+            while (!q.empty()) {
+                const int u = q.front();
+                q.pop();
+                for (int v : fwd[static_cast<size_t>(u)]) {
+                    if (!fromIn[static_cast<size_t>(v)]) {
+                        fromIn[static_cast<size_t>(v)] = true;
+                        q.push(v);
+                    }
+                }
+            }
+        }
+
+        std::vector<bool> toOut(static_cast<size_t>(totalNodes), false);
+        {
+            std::queue<int> q;
+            toOut[static_cast<size_t>(outNode)] = true;
+            q.push(outNode);
+            while (!q.empty()) {
+                const int u = q.front();
+                q.pop();
+                for (int v : rev[static_cast<size_t>(u)]) {
+                    if (!toOut[static_cast<size_t>(v)]) {
+                        toOut[static_cast<size_t>(v)] = true;
+                        q.push(v);
+                    }
+                }
+            }
+        }
+
+        std::vector<bool> isLive(static_cast<size_t>(numBlocks), false);
+        std::vector<int> liveBlocks;
+        for (int i = 0; i < numBlocks; ++i) {
+            if (fromIn[static_cast<size_t>(i)] && toOut[static_cast<size_t>(i)]) {
+                isLive[static_cast<size_t>(i)] = true;
+                liveBlocks.push_back(i);
+            }
+        }
+
+        std::vector<std::vector<int>> liveAdj(static_cast<size_t>(numBlocks));
+        std::vector<int> inDeg(static_cast<size_t>(numBlocks), 0);
+        for (const auto& c : cleanCables) {
+            const int u = nodeOf(c.from);
+            const int v = nodeOf(c.to);
+            if (u < numBlocks && v < numBlocks && isLive[static_cast<size_t>(u)] && isLive[static_cast<size_t>(v)]) {
+                liveAdj[static_cast<size_t>(u)].push_back(v);
+                ++inDeg[static_cast<size_t>(v)];
+            }
+        }
+
+        topo.clear();
+        topo.reserve(liveBlocks.size());
+        std::queue<int> q;
+        for (int bIdx : liveBlocks) {
+            if (inDeg[static_cast<size_t>(bIdx)] == 0) {
+                q.push(bIdx);
+            }
+        }
+        while (!q.empty()) {
+            const int u = q.front();
+            q.pop();
+            topo.push_back(u);
+            for (int v : liveAdj[static_cast<size_t>(u)]) {
+                if (--inDeg[static_cast<size_t>(v)] == 0) {
+                    q.push(v);
+                }
+            }
+        }
+
+        if (topo.size() == liveBlocks.size()) {
+            break;
+        }
+
+        // Cycle exists among live blocks: drop cables on any cycle and re-sort.
+        std::vector<std::vector<bool>> canReach(static_cast<size_t>(numBlocks),
+                                                std::vector<bool>(static_cast<size_t>(numBlocks), false));
+        for (int start : liveBlocks) {
+            std::queue<int> rq;
+            canReach[static_cast<size_t>(start)][static_cast<size_t>(start)] = true;
+            rq.push(start);
+            while (!rq.empty()) {
+                const int cur = rq.front();
+                rq.pop();
+                for (int nxt : liveAdj[static_cast<size_t>(cur)]) {
+                    if (!canReach[static_cast<size_t>(start)][static_cast<size_t>(nxt)]) {
+                        canReach[static_cast<size_t>(start)][static_cast<size_t>(nxt)] = true;
+                        rq.push(nxt);
+                    }
+                }
+            }
+        }
+
+        std::vector<Cable> pruned;
+        pruned.reserve(cleanCables.size());
+        for (const auto& c : cleanCables) {
+            const int u = nodeOf(c.from);
+            const int v = nodeOf(c.to);
+            if (u < numBlocks && v < numBlocks &&
+                isLive[static_cast<size_t>(u)] && isLive[static_cast<size_t>(v)] &&
+                canReach[static_cast<size_t>(v)][static_cast<size_t>(u)]) {
+                valid_ = false;
+                continue;
+            }
+            pruned.push_back(c);
+        }
+        cleanCables = std::move(pruned);
+    }
+
+    cables_ = std::move(cleanCables);
+
+    std::vector<int> blockToOutBuf(static_cast<size_t>(numBlocks), -1);
+    for (size_t s = 0; s < topo.size(); ++s) {
+        blockToOutBuf[static_cast<size_t>(topo[s])] = static_cast<int>(s);
+    }
+
+    plan_.resize(topo.size());
+    for (size_t s = 0; s < topo.size(); ++s) {
+        Block* blk = blocks_[static_cast<size_t>(topo[s])].get();
+        plan_[s].block = blk;
+        plan_[s].numInputs = std::clamp(blk->spec().inputs, 1, 2);
+        plan_[s].outBuf = static_cast<int>(s);
+    }
+
+    for (const auto& c : cables_) {
+        int srcBuf = -1;
+        if (c.from != kInputUid) {
+            srcBuf = blockToOutBuf[static_cast<size_t>(uidToIdx.at(c.from))];
+            if (srcBuf < 0) continue;
+        }
+
+        if (c.to == kOutputUid) {
+            outputSources_.push_back(srcBuf);
+        } else {
+            const int dstIdx = uidToIdx.at(c.to);
+            const int dstStep = blockToOutBuf[static_cast<size_t>(dstIdx)];
+            if (dstStep >= 0 && c.port >= 0 && c.port < plan_[static_cast<size_t>(dstStep)].numInputs) {
+                plan_[static_cast<size_t>(dstStep)].sources[c.port].push_back(srcBuf);
+            }
         }
     }
 }
 
 Block* Board::findByUid(const std::string& uid) const noexcept {
-    for (Block* b : raw_) {
-        if (b->uid() == uid) return b;
+    for (const auto& b : blocks_) {
+        if (b && b->uid() == uid) return b.get();
     }
     return nullptr;
 }
 
 void Board::prepareScratch(int maxBlock) {
-    dry_.assign(static_cast<size_t>(std::max(1, maxBlock)), 0.0f);
+    const size_t cap = static_cast<size_t>(std::max(1, maxBlock));
+    buffers_.resize(plan_.size());
+    for (auto& buf : buffers_) {
+        buf.assign(cap, 0.0f);
+    }
+    inputCopy_.assign(cap, 0.0f);
+    portScratch_[0].assign(cap, 0.0f);
+    portScratch_[1].assign(cap, 0.0f);
+    dry_.assign(cap, 0.0f);
 }
 
 void Board::process(float* io, int n) noexcept {
     if (io == nullptr || n <= 0) return;
 
-    const int scratchCap = static_cast<int>(dry_.size());
+    const int scratchCap = static_cast<int>(inputCopy_.size());
     if (scratchCap > 0 && n > scratchCap) {
         int offset = 0;
         while (offset < n) {
@@ -977,35 +1342,98 @@ void Board::process(float* io, int n) noexcept {
         }
         return;
     }
+    if (scratchCap < n) {
+        std::fill_n(io, n, 0.0f);
+        return;
+    }
 
-    for (Block* b : raw_) {
+    std::copy_n(io, n, inputCopy_.data());
+
+    auto sumSources = [&](const std::vector<int>& srcs, float* dst) noexcept {
+        if (srcs.empty()) {
+            std::fill_n(dst, n, 0.0f);
+            return;
+        }
+        const float* first = (srcs[0] < 0) ? inputCopy_.data() : buffers_[static_cast<size_t>(srcs[0])].data();
+        std::copy_n(first, n, dst);
+        for (size_t s = 1; s < srcs.size(); ++s) {
+            const float* src = (srcs[s] < 0) ? inputCopy_.data() : buffers_[static_cast<size_t>(srcs[s])].data();
+            for (int i = 0; i < n; ++i) {
+                dst[i] += src[i];
+            }
+        }
+    };
+
+    for (const Step& step : plan_) {
+        for (int p = 0; p < step.numInputs; ++p) {
+            sumSources(step.sources[p], portScratch_[p].data());
+        }
+
+        Block* b = step.block;
+        float* outBuf = buffers_[static_cast<size_t>(step.outBuf)].data();
         const float target = b->enabled() ? 1.0f : 0.0f;
+
         if (b->fade == 1.0f && target == 1.0f) {
-            b->process(io, n);
+            if (step.numInputs == 1) {
+                std::copy_n(portScratch_[0].data(), n, outBuf);
+                b->process(outBuf, n);
+            } else {
+                const float* ins[2] = {portScratch_[0].data(), portScratch_[1].data()};
+                b->processMulti(ins, step.numInputs, outBuf, n);
+            }
         } else if (b->fade == 0.0f && target == 0.0f) {
-            continue;
-        } else if (scratchCap >= n) {
-            std::copy_n(io, n, dry_.data());
-            b->process(io, n);
+            std::copy_n(portScratch_[0].data(), n, outBuf);
+        } else {
+            if (step.numInputs == 1) {
+                std::copy_n(portScratch_[0].data(), n, outBuf);
+                b->process(outBuf, n);
+            } else {
+                const float* ins[2] = {portScratch_[0].data(), portScratch_[1].data()};
+                b->processMulti(ins, step.numInputs, outBuf, n);
+            }
 
             const double sr = (b->preparedRate_ > 1.0) ? b->preparedRate_ : 48000.0;
-            const float step = 1.0f / (0.01f * static_cast<float>(sr));
+            const float fadeStep = 1.0f / (0.01f * static_cast<float>(sr));
             for (int i = 0; i < n; ++i) {
                 if (b->fade < target) {
-                    b->fade = std::min(1.0f, b->fade + step);
+                    b->fade = std::min(1.0f, b->fade + fadeStep);
                 } else if (b->fade > target) {
-                    b->fade = std::max(0.0f, b->fade - step);
+                    b->fade = std::max(0.0f, b->fade - fadeStep);
                 }
                 const float f = b->fade;
-                io[i] = dry_[static_cast<size_t>(i)] * (1.0f - f) + io[i] * f;
-            }
-        } else {
-            b->fade = target;
-            if (target > 0.5f) {
-                b->process(io, n);
+                outBuf[i] = portScratch_[0][static_cast<size_t>(i)] * (1.0f - f) + outBuf[i] * f;
             }
         }
     }
+
+    sumSources(outputSources_, io);
+}
+
+bool wouldCreateCycle(const std::vector<Cable>& cables, const Cable& add) {
+    if (add.from == add.to) {
+        return true;
+    }
+
+    std::vector<std::string> stack;
+    std::unordered_set<std::string> visited;
+    stack.push_back(add.to);
+    visited.insert(add.to);
+
+    while (!stack.empty()) {
+        std::string cur = std::move(stack.back());
+        stack.pop_back();
+        for (const auto& c : cables) {
+            if (c.from == cur) {
+                if (c.to == add.from) {
+                    return true;
+                }
+                if (visited.insert(c.to).second) {
+                    stack.push_back(c.to);
+                }
+            }
+        }
+    }
+    return false;
 }
 
 } // namespace wsamp::dsp

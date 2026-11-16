@@ -207,6 +207,7 @@ async function handleSendToWoodshed() {
       capo,
       bpm,
       text,
+      ...(currentExtraction.notation ? { notation: currentExtraction.notation } : {}),
       source: currentExtraction.site || 'web',
       url: currentExtraction.url || ''
     });
@@ -248,7 +249,8 @@ async function handleSaveToLibrary() {
     tuning,
     capo,
     bpm,
-    text
+    text,
+    ...(currentExtraction.notation ? { notation: currentExtraction.notation } : {})
   });
 
   showStatus(updated ? 'Updated in your library' : 'Saved to your library', 3000);

@@ -3,8 +3,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <cstdio>
 #include <cstdlib>
 #include <fstream>
+#include <random>
+#include <unordered_map>
 #include <unordered_set>
 #include <utility>
 
@@ -20,7 +23,106 @@ namespace {
 
 using json = nlohmann::json;
 
-constexpr int kPresetFileVersion = 2;
+constexpr int kPresetFileVersion = 3;
+
+std::wstring utf8ToWidePath(const std::string& utf8) {
+    if (utf8.empty()) return {};
+#ifdef _WIN32
+    const int needed = MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), nullptr, 0);
+    if (needed <= 0) return {};
+    std::wstring out(static_cast<size_t>(needed), L'\0');
+    MultiByteToWideChar(CP_UTF8, 0, utf8.data(), static_cast<int>(utf8.size()), out.data(), needed);
+    return out;
+#else
+    return std::wstring(utf8.begin(), utf8.end());
+#endif
+}
+
+std::string wideToUtf8Path(const std::wstring& wide) {
+    if (wide.empty()) return {};
+#ifdef _WIN32
+    const int needed = WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()),
+                                           nullptr, 0, nullptr, nullptr);
+    if (needed <= 0) return {};
+    std::string out(static_cast<size_t>(needed), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, wide.data(), static_cast<int>(wide.size()),
+                        out.data(), needed, nullptr, nullptr);
+    return out;
+#else
+    return std::string(wide.begin(), wide.end());
+#endif
+}
+
+std::string extractFilenameUtf8(const std::string& fullPath) {
+    if (fullPath.empty()) return {};
+    return wideToUtf8Path(std::filesystem::path(utf8ToWidePath(fullPath)).filename().wstring());
+}
+
+std::string trimWhitespace(const std::string& s) {
+    size_t start = 0;
+    while (start < s.size() && std::isspace(static_cast<unsigned char>(s[start]))) {
+        ++start;
+    }
+    size_t end = s.size();
+    while (end > start && std::isspace(static_cast<unsigned char>(s[end - 1]))) {
+        --end;
+    }
+    return s.substr(start, end - start);
+}
+
+size_t utf8CodepointCount(const std::string& s) noexcept {
+    size_t count = 0;
+    for (unsigned char c : s) {
+        if ((c & 0xC0u) != 0x80u) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::string truncateUtf8Codepoints(const std::string& s, size_t maxCp) {
+    size_t count = 0;
+    size_t i = 0;
+    while (i < s.size()) {
+        if ((static_cast<unsigned char>(s[i]) & 0xC0u) != 0x80u) {
+            if (count == maxCp) break;
+            ++count;
+        }
+        ++i;
+    }
+    return s.substr(0, i);
+}
+
+std::string randomHex8() {
+    std::random_device rd;
+    std::mt19937 gen(rd());
+    std::uniform_int_distribution<uint32_t> dist(0, 0xFFFFFFFFu);
+    char buf[16]{};
+    std::snprintf(buf, sizeof(buf), "%08x", dist(gen));
+    return std::string(buf);
+}
+
+void applyRowLayout(Preset& p) {
+    p.inX = 1.0f;
+    p.inY = 6.0f;
+    for (size_t i = 0; i < p.blocks.size(); ++i) {
+        p.blocks[i].x = 10.0f + 9.0f * static_cast<float>(i);
+        p.blocks[i].y = 5.0f;
+    }
+    p.outX = 10.0f + 9.0f * static_cast<float>(p.blocks.size());
+    p.outY = 6.0f;
+
+    p.cables.clear();
+    if (p.blocks.empty()) {
+        p.cables.push_back(CableState{dsp::kInputUid, dsp::kOutputUid, 0});
+    } else {
+        p.cables.push_back(CableState{dsp::kInputUid, p.blocks.front().uid, 0});
+        for (size_t i = 0; i + 1 < p.blocks.size(); ++i) {
+            p.cables.push_back(CableState{p.blocks[i].uid, p.blocks[i + 1].uid, 0});
+        }
+        p.cables.push_back(CableState{p.blocks.back().uid, dsp::kOutputUid, 0});
+    }
+}
 
 bool diffFloat(float a, float b) noexcept {
     return std::abs(a - b) > 1e-4f;
@@ -151,14 +253,19 @@ BlockState* findFirstBlockOfType(Preset& p, const std::string& type) {
 
 bool presetsEqual(const Preset& a, const Preset& b) noexcept {
     if (a.id != b.id || a.name != b.name) return false;
+    if (a.builtin != b.builtin || a.basedOn != b.basedOn) return false;
     if (diffFloat(a.inputTrimDb, b.inputTrimDb)) return false;
     if (diffFloat(a.gateThresholdDb, b.gateThresholdDb)) return false;
     if (diffFloat(a.outputLevelDb, b.outputLevelDb)) return false;
+    if (diffFloat(a.inX, b.inX) || diffFloat(a.inY, b.inY)) return false;
+    if (diffFloat(a.outX, b.outX) || diffFloat(a.outY, b.outY)) return false;
     if (a.blocks.size() != b.blocks.size()) return false;
     for (size_t i = 0; i < a.blocks.size(); ++i) {
         const BlockState& ba = a.blocks[i];
         const BlockState& bb = b.blocks[i];
-        if (ba.uid != bb.uid || ba.type != bb.type || ba.enabled != bb.enabled || ba.file != bb.file) {
+        if (ba.uid != bb.uid || ba.type != bb.type || ba.enabled != bb.enabled ||
+            ba.file != bb.file || ba.missingFile != bb.missingFile ||
+            diffFloat(ba.x, bb.x) || diffFloat(ba.y, bb.y)) {
             return false;
         }
         if (ba.params.size() != bb.params.size()) return false;
@@ -169,11 +276,19 @@ bool presetsEqual(const Preset& a, const Preset& b) noexcept {
             }
         }
     }
+    if (a.cables.size() != b.cables.size()) return false;
+    for (size_t i = 0; i < a.cables.size(); ++i) {
+        if (a.cables[i].from != b.cables[i].from ||
+            a.cables[i].to != b.cables[i].to ||
+            a.cables[i].port != b.cables[i].port) {
+            return false;
+        }
+    }
     return true;
 }
 
 json serializePreset(const Preset& p) {
-    json blocksArr = json::array();
+    json nodesArr = json::array();
     for (const auto& b : p.blocks) {
         json jp = json::object();
         for (const auto& [k, v] : b.params) {
@@ -183,22 +298,98 @@ json serializePreset(const Preset& p) {
             {"uid", b.uid},
             {"type", b.type},
             {"enabled", b.enabled},
-            {"params", std::move(jp)}
+            {"params", std::move(jp)},
+            {"x", b.x},
+            {"y", b.y}
         };
         if (!b.file.empty()) {
             jb["file"] = b.file;
         }
-        blocksArr.push_back(std::move(jb));
+        if (!b.missingFile.empty()) {
+            jb["missingFile"] = b.missingFile;
+        }
+        nodesArr.push_back(std::move(jb));
     }
+
+    json cablesArr = json::array();
+    for (const auto& c : p.cables) {
+        cablesArr.push_back({
+            {"from", c.from},
+            {"to", c.to},
+            {"port", c.port}
+        });
+    }
+
     return json{
         {"id", p.id},
         {"name", p.name},
+        {"builtin", p.builtin},
+        {"basedOn", p.basedOn},
         {"inputTrimDb", p.inputTrimDb},
         {"gateThresholdDb", p.gateThresholdDb},
         {"outputLevelDb", p.outputLevelDb},
         {"nextUid", p.nextUid},
-        {"blocks", std::move(blocksArr)}
+        {"io", {
+            {"inX", p.inX},
+            {"inY", p.inY},
+            {"outX", p.outX},
+            {"outY", p.outY}
+        }},
+        {"nodes", std::move(nodesArr)},
+        {"cables", std::move(cablesArr)}
     };
+}
+
+void parseBlocksArray(const json& blocksJson, Preset& outPreset) {
+    std::vector<BlockState> newBlocks;
+    int namCount = 0;
+    for (const auto& jb : blocksJson) {
+        if (!jb.is_object() || !jb.contains("type") || !jb["type"].is_string()) continue;
+        const std::string bType = jb["type"].get<std::string>();
+        const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(bType);
+        if (!spec) continue; // drop unknown block types
+
+        if (static_cast<int>(newBlocks.size()) >= dsp::kMaxBoardBlocks) break;
+        if (spec->type == dsp::BlockType::Nam) {
+            if (namCount >= dsp::kMaxNamBlocks) continue;
+            ++namCount;
+        }
+
+        BlockState bs;
+        bs.type = spec->id;
+        if (jb.contains("uid") && jb["uid"].is_string()) {
+            bs.uid = jb["uid"].get<std::string>();
+        }
+        if (jb.contains("enabled") && jb["enabled"].is_boolean()) {
+            bs.enabled = jb["enabled"].get<bool>();
+        }
+        if (jb.contains("x") && jb["x"].is_number()) {
+            const float vx = jb["x"].get<float>();
+            if (std::isfinite(vx)) bs.x = vx;
+        }
+        if (jb.contains("y") && jb["y"].is_number()) {
+            const float vy = jb["y"].get<float>();
+            if (std::isfinite(vy)) bs.y = vy;
+        }
+        if (spec->usesFile) {
+            if (jb.contains("file") && jb["file"].is_string()) {
+                bs.file = jb["file"].get<std::string>();
+            }
+            if (bs.file.empty() && jb.contains("missingFile") && jb["missingFile"].is_string()) {
+                bs.missingFile = jb["missingFile"].get<std::string>();
+            }
+        }
+        if (jb.contains("params") && jb["params"].is_object()) {
+            for (const auto& [pk, pv] : jb["params"].items()) {
+                if (pv.is_number()) {
+                    bs.params[pk] = pv.get<float>();
+                }
+            }
+        }
+        normalizeBlockParams(bs, *spec);
+        newBlocks.push_back(std::move(bs));
+    }
+    outPreset.blocks = std::move(newBlocks);
 }
 
 } // namespace
@@ -243,6 +434,315 @@ bool PresetBank::canAddBlock(const Preset& preset, const std::string& type, std:
     return true;
 }
 
+bool PresetBank::canAddCable(const Preset& preset, const CableState& cable, std::string& errorOut) {
+    errorOut.clear();
+    if (static_cast<int>(preset.cables.size()) >= dsp::kMaxCables) {
+        errorOut = "Board cannot exceed " + std::to_string(dsp::kMaxCables) + " cables";
+        return false;
+    }
+    if (cable.from == dsp::kOutputUid) {
+        errorOut = "Cable cannot start at Output";
+        return false;
+    }
+    if (cable.to == dsp::kInputUid) {
+        errorOut = "Cable cannot end at Input";
+        return false;
+    }
+    if (cable.from.empty() || cable.to.empty()) {
+        errorOut = "Cable endpoints cannot be empty";
+        return false;
+    }
+    if (cable.from == cable.to) {
+        errorOut = "Cable cannot connect a node to itself";
+        return false;
+    }
+
+    if (cable.from != dsp::kInputUid) {
+        bool foundFrom = false;
+        for (const auto& b : preset.blocks) {
+            if (b.uid == cable.from) {
+                foundFrom = true;
+                break;
+            }
+        }
+        if (!foundFrom) {
+            errorOut = "Unknown source uid: " + cable.from;
+            return false;
+        }
+    }
+
+    int targetInputs = 0;
+    if (cable.to == dsp::kOutputUid) {
+        targetInputs = 1;
+    } else {
+        const BlockState* targetBlock = nullptr;
+        for (const auto& b : preset.blocks) {
+            if (b.uid == cable.to) {
+                targetBlock = &b;
+                break;
+            }
+        }
+        if (!targetBlock) {
+            errorOut = "Unknown destination uid: " + cable.to;
+            return false;
+        }
+        const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(targetBlock->type);
+        if (!spec) {
+            errorOut = "Unknown block type: " + targetBlock->type;
+            return false;
+        }
+        targetInputs = spec->inputs;
+    }
+
+    if (cable.port < 0 || cable.port >= targetInputs) {
+        errorOut = "Invalid input port " + std::to_string(cable.port) + " for " + cable.to;
+        return false;
+    }
+
+    for (const auto& existing : preset.cables) {
+        if (existing.from == cable.from && existing.to == cable.to && existing.port == cable.port) {
+            errorOut = "Duplicate cable";
+            return false;
+        }
+    }
+
+    std::vector<dsp::Cable> dspCables;
+    dspCables.reserve(preset.cables.size());
+    for (const auto& c : preset.cables) {
+        dspCables.push_back(dsp::Cable{c.from, c.to, c.port});
+    }
+    if (dsp::wouldCreateCycle(dspCables, dsp::Cable{cable.from, cable.to, cable.port})) {
+        errorOut = "Cable would create a cycle";
+        return false;
+    }
+
+    return true;
+}
+
+json PresetBank::toExportJson(const Preset& preset) {
+    json nodesArr = json::array();
+    for (const auto& b : preset.blocks) {
+        json jp = json::object();
+        for (const auto& [k, v] : b.params) {
+            jp[k] = v;
+        }
+        json fileNameVal = nullptr;
+        json filePathVal = nullptr;
+        if (!b.file.empty()) {
+            fileNameVal = extractFilenameUtf8(b.file);
+            filePathVal = b.file;
+        } else if (!b.missingFile.empty()) {
+            fileNameVal = b.missingFile;
+        }
+        nodesArr.push_back({
+            {"uid", b.uid},
+            {"type", b.type},
+            {"enabled", b.enabled},
+            {"params", std::move(jp)},
+            {"x", b.x},
+            {"y", b.y},
+            {"file", std::move(fileNameVal)},
+            {"filePath", std::move(filePathVal)}
+        });
+    }
+
+    json cablesArr = json::array();
+    for (const auto& c : preset.cables) {
+        cablesArr.push_back({
+            {"from", c.from},
+            {"to", c.to},
+            {"port", c.port}
+        });
+    }
+
+    return json{
+        {"format", "woodshed-preset"},
+        {"version", 1},
+        {"name", preset.name},
+        {"basedOn", preset.basedOn},
+        {"inputTrimDb", preset.inputTrimDb},
+        {"gateThresholdDb", preset.gateThresholdDb},
+        {"outputLevelDb", preset.outputLevelDb},
+        {"io", {
+            {"inX", preset.inX},
+            {"inY", preset.inY},
+            {"outX", preset.outX},
+            {"outY", preset.outY}
+        }},
+        {"nodes", std::move(nodesArr)},
+        {"cables", std::move(cablesArr)}
+    };
+}
+
+std::optional<Preset> PresetBank::fromExportJson(const json& j, std::string& errorOut) {
+    errorOut.clear();
+    if (!j.is_object()) {
+        errorOut = "Preset export must be a JSON object";
+        return std::nullopt;
+    }
+    if (j.contains("format") && j["format"].is_string() && j["format"].get<std::string>() != "woodshed-preset") {
+        errorOut = "Invalid preset export format";
+        return std::nullopt;
+    }
+    if (j.contains("version") && j["version"].is_number_integer() && j["version"].get<int>() != 1) {
+        errorOut = "Unsupported preset export version";
+        return std::nullopt;
+    }
+
+    Preset p;
+    p.id = "u_" + randomHex8();
+    p.builtin = false;
+    p.name = "Imported Preset";
+    if (j.contains("name") && j["name"].is_string()) {
+        std::string trimmed = trimWhitespace(j["name"].get<std::string>());
+        if (!trimmed.empty()) {
+            p.name = truncateUtf8Codepoints(trimmed, 40);
+        }
+    }
+    if (j.contains("basedOn") && j["basedOn"].is_string()) {
+        p.basedOn = j["basedOn"].get<std::string>();
+    }
+    if (j.contains("inputTrimDb") && j["inputTrimDb"].is_number()) {
+        const float v = j["inputTrimDb"].get<float>();
+        if (std::isfinite(v)) p.inputTrimDb = std::clamp(v, -24.0f, 24.0f);
+    }
+    if (j.contains("gateThresholdDb") && j["gateThresholdDb"].is_number()) {
+        const float v = j["gateThresholdDb"].get<float>();
+        if (std::isfinite(v)) p.gateThresholdDb = std::clamp(v, -80.0f, 0.0f);
+    }
+    if (j.contains("outputLevelDb") && j["outputLevelDb"].is_number()) {
+        const float v = j["outputLevelDb"].get<float>();
+        if (std::isfinite(v)) p.outputLevelDb = std::clamp(v, -60.0f, 24.0f);
+    }
+    if (j.contains("io") && j["io"].is_object()) {
+        const json& jio = j["io"];
+        if (jio.contains("inX") && jio["inX"].is_number() && std::isfinite(jio["inX"].get<float>())) {
+            p.inX = jio["inX"].get<float>();
+        }
+        if (jio.contains("inY") && jio["inY"].is_number() && std::isfinite(jio["inY"].get<float>())) {
+            p.inY = jio["inY"].get<float>();
+        }
+        if (jio.contains("outX") && jio["outX"].is_number() && std::isfinite(jio["outX"].get<float>())) {
+            p.outX = jio["outX"].get<float>();
+        }
+        if (jio.contains("outY") && jio["outY"].is_number() && std::isfinite(jio["outY"].get<float>())) {
+            p.outY = jio["outY"].get<float>();
+        }
+    }
+
+    std::unordered_map<std::string, std::string> uidMap;
+    int nextNum = 1;
+    int namCount = 0;
+    if (j.contains("nodes") && j["nodes"].is_array()) {
+        for (const auto& jn : j["nodes"]) {
+            if (!jn.is_object() || !jn.contains("type") || !jn["type"].is_string()) continue;
+            const std::string bType = jn["type"].get<std::string>();
+            const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(bType);
+            if (!spec) continue; // unknown block types dropped
+
+            if (static_cast<int>(p.blocks.size()) >= dsp::kMaxBoardBlocks) break;
+            if (spec->type == dsp::BlockType::Nam) {
+                if (namCount >= dsp::kMaxNamBlocks) continue;
+                ++namCount;
+            }
+
+            const std::string freshUid = "b" + std::to_string(nextNum++);
+            if (jn.contains("uid") && jn["uid"].is_string()) {
+                const std::string oldUid = jn["uid"].get<std::string>();
+                if (!oldUid.empty() && oldUid != dsp::kInputUid && oldUid != dsp::kOutputUid && !uidMap.count(oldUid)) {
+                    uidMap[oldUid] = freshUid;
+                }
+            }
+
+            BlockState bs;
+            bs.uid = freshUid;
+            bs.type = spec->id;
+            bs.enabled = (jn.contains("enabled") && jn["enabled"].is_boolean()) ? jn["enabled"].get<bool>() : true;
+            bs.x = 10.0f + 9.0f * static_cast<float>(p.blocks.size());
+            bs.y = 5.0f;
+            if (jn.contains("x") && jn["x"].is_number() && std::isfinite(jn["x"].get<float>())) {
+                bs.x = jn["x"].get<float>();
+            }
+            if (jn.contains("y") && jn["y"].is_number() && std::isfinite(jn["y"].get<float>())) {
+                bs.y = jn["y"].get<float>();
+            }
+            if (jn.contains("params") && jn["params"].is_object()) {
+                for (const auto& [pk, pv] : jn["params"].items()) {
+                    if (pv.is_number()) {
+                        bs.params[pk] = pv.get<float>();
+                    }
+                }
+            }
+            normalizeBlockParams(bs, *spec);
+
+            if (spec->usesFile) {
+                std::string rawFilePath;
+                std::string rawFileName;
+                if (jn.contains("filePath") && jn["filePath"].is_string()) {
+                    rawFilePath = jn["filePath"].get<std::string>();
+                }
+                if (jn.contains("file") && jn["file"].is_string()) {
+                    rawFileName = jn["file"].get<std::string>();
+                }
+                if (!rawFilePath.empty()) {
+                    std::error_code ec;
+                    const std::filesystem::path fsPath(utf8ToWidePath(rawFilePath));
+                    if (std::filesystem::exists(fsPath, ec) && !std::filesystem::is_directory(fsPath, ec)) {
+                        bs.file = rawFilePath;
+                    } else {
+                        bs.file.clear();
+                        bs.missingFile = !rawFileName.empty() ? rawFileName : extractFilenameUtf8(rawFilePath);
+                    }
+                } else if (!rawFileName.empty()) {
+                    bs.file.clear();
+                    bs.missingFile = rawFileName;
+                }
+            }
+
+            p.blocks.push_back(std::move(bs));
+        }
+    }
+    p.nextUid = nextNum;
+
+    if (j.contains("cables") && j["cables"].is_array()) {
+        for (const auto& jc : j["cables"]) {
+            if (!jc.is_object() || !jc.contains("from") || !jc["from"].is_string() ||
+                !jc.contains("to") || !jc["to"].is_string()) {
+                continue;
+            }
+            const std::string rawFrom = jc["from"].get<std::string>();
+            const std::string rawTo = jc["to"].get<std::string>();
+            const int port = (jc.contains("port") && jc["port"].is_number_integer()) ? jc["port"].get<int>() : 0;
+
+            std::string mappedFrom;
+            if (rawFrom == dsp::kInputUid) {
+                mappedFrom = dsp::kInputUid;
+            } else if (auto it = uidMap.find(rawFrom); it != uidMap.end()) {
+                mappedFrom = it->second;
+            } else {
+                continue; // source node was unknown/dropped
+            }
+
+            std::string mappedTo;
+            if (rawTo == dsp::kOutputUid) {
+                mappedTo = dsp::kOutputUid;
+            } else if (auto it = uidMap.find(rawTo); it != uidMap.end()) {
+                mappedTo = it->second;
+            } else {
+                continue; // target node was unknown/dropped
+            }
+
+            CableState cs{mappedFrom, mappedTo, port};
+            std::string cableErr;
+            if (canAddCable(p, cs, cableErr)) {
+                p.cables.push_back(std::move(cs));
+            }
+        }
+    }
+
+    return p;
+}
+
 std::vector<Preset> PresetBank::makeBuiltinDefaults() {
     std::vector<Preset> list;
     list.reserve(10);
@@ -261,6 +761,8 @@ std::vector<Preset> PresetBank::makeBuiltinDefaults() {
         Preset pr;
         pr.id = id;
         pr.name = name;
+        pr.builtin = true;
+        pr.basedOn = id;
         pr.inputTrimDb = 0.0f;
         pr.gateThresholdDb = gateDb;
         pr.outputLevelDb = 0.0f;
@@ -321,6 +823,7 @@ std::vector<Preset> PresetBank::makeBuiltinDefaults() {
         }
 
         pr.nextUid = uidNum;
+        applyRowLayout(pr);
         list.push_back(std::move(pr));
     };
 
@@ -377,6 +880,119 @@ Preset* PresetBank::findByIdMutable(const std::string& id) noexcept {
     return nullptr;
 }
 
+int PresetBank::customPresetCount() const noexcept {
+    int count = 0;
+    for (const auto& p : presets_) {
+        if (!p.builtin) ++count;
+    }
+    return count;
+}
+
+std::string PresetBank::generateUniqueCustomId() const {
+    for (;;) {
+        std::string candidate = "u_" + randomHex8();
+        if (findById(candidate) == nullptr) {
+            return candidate;
+        }
+    }
+}
+
+Preset& PresetBank::createCustom(const std::string& name, const std::string& basedOn) {
+    Preset pr;
+    pr.id = generateUniqueCustomId();
+    std::string trimmed = trimWhitespace(name);
+    pr.name = trimmed.empty() ? "New Preset" : truncateUtf8Codepoints(trimmed, 40);
+    pr.builtin = false;
+    pr.basedOn = basedOn;
+    pr.inputTrimDb = 0.0f;
+    pr.gateThresholdDb = -70.0f;
+    pr.outputLevelDb = 0.0f;
+    pr.blocks.push_back(makeBlockStateWithSpec(dsp::BlockType::Amp, "b1", {}));
+    pr.blocks.push_back(makeBlockStateWithSpec(dsp::BlockType::Cab, "b2", {}));
+    pr.nextUid = 3;
+    applyRowLayout(pr);
+    presets_.push_back(std::move(pr));
+    return presets_.back();
+}
+
+Preset& PresetBank::addCustomPreset(Preset preset) {
+    preset.builtin = false;
+    if (preset.id.empty() || findById(preset.id) != nullptr) {
+        preset.id = generateUniqueCustomId();
+    }
+    presets_.push_back(std::move(preset));
+    return presets_.back();
+}
+
+Preset* PresetBank::duplicatePreset(const std::string& sourceId, const std::string& requestedName, std::string& errorOut) {
+    errorOut.clear();
+    const Preset* source = findById(sourceId);
+    if (!source) {
+        errorOut = "Unknown preset id: " + sourceId;
+        return nullptr;
+    }
+    if (customPresetCount() >= kMaxCustomPresets) {
+        errorOut = "Maximum of " + std::to_string(kMaxCustomPresets) + " custom presets reached";
+        return nullptr;
+    }
+
+    Preset copy = *source;
+    copy.id = generateUniqueCustomId();
+    copy.builtin = false;
+    if (!source->basedOn.empty()) {
+        copy.basedOn = source->basedOn;
+    } else if (source->builtin) {
+        copy.basedOn = source->id;
+    } else {
+        copy.basedOn.clear();
+    }
+
+    std::string trimmed = trimWhitespace(requestedName);
+    if (trimmed.empty()) {
+        trimmed = source->name + " copy";
+    }
+    copy.name = truncateUtf8Codepoints(trimmed, 40);
+
+    presets_.push_back(std::move(copy));
+    return &presets_.back();
+}
+
+bool PresetBank::renamePreset(const std::string& id, const std::string& newName, std::string& errorOut) {
+    errorOut.clear();
+    Preset* target = findByIdMutable(id);
+    if (!target) {
+        errorOut = "Unknown preset id: " + id;
+        return false;
+    }
+    if (target->builtin) {
+        errorOut = "Built-in presets cannot be renamed";
+        return false;
+    }
+    const std::string trimmed = trimWhitespace(newName);
+    const size_t cpLen = utf8CodepointCount(trimmed);
+    if (cpLen < 1 || cpLen > 40) {
+        errorOut = "Preset name must be 1 to 40 characters";
+        return false;
+    }
+    target->name = trimmed;
+    return true;
+}
+
+bool PresetBank::removePreset(const std::string& id, std::string& errorOut) {
+    errorOut.clear();
+    auto it = std::find_if(presets_.begin(), presets_.end(), [&](const Preset& p) { return p.id == id; });
+    if (it == presets_.end()) {
+        errorOut = "Unknown preset id: " + id;
+        return false;
+    }
+    if (it->builtin) {
+        errorOut = "Built-in presets cannot be deleted";
+        return false;
+    }
+    presets_.erase(it);
+    return true;
+}
+
 bool PresetBank::loadOverrides(const std::filesystem::path& jsonPath, std::string& errorOut) {
     errorOut.clear();
     resetToDefaults();
@@ -407,24 +1023,53 @@ bool PresetBank::loadOverrides(const std::filesystem::path& jsonPath, std::strin
 
     if (root.contains("version") && root["version"].is_number_integer()) {
         const int ver = root["version"].get<int>();
-        if (ver != kPresetFileVersion) {
+        if (ver != 2 && ver != kPresetFileVersion) {
             errorOut = "Unsupported presets.json version: " + std::to_string(ver);
             return false;
         }
         if (!root.contains("presets") || !root["presets"].is_array()) {
+            if (ver == 2) {
+                std::string migrateSaveErr;
+                saveOverridesAtomic(jsonPath, migrateSaveErr);
+            }
             return true;
         }
 
         for (const auto& item : root["presets"]) {
             if (!item.is_object() || !item.contains("id") || !item["id"].is_string()) continue;
             const std::string id = item["id"].get<std::string>();
-            Preset* target = findByIdMutable(id);
-            if (!target) continue; // ignore unknown ids
+            Preset* existingBuiltin = findByIdMutable(id);
+            const bool isBuiltinOverride = (existingBuiltin != nullptr && existingBuiltin->builtin);
 
-            Preset loaded = *target;
-            if (item.contains("name") && item["name"].is_string()) {
-                loaded.name = item["name"].get<std::string>();
+            if (ver == 2 && !isBuiltinOverride) {
+                continue; // v2 only stored built-in overrides
             }
+
+            if (!isBuiltinOverride) {
+                if (customPresetCount() >= kMaxCustomPresets) continue;
+            }
+
+            Preset loaded = isBuiltinOverride ? *existingBuiltin : Preset{};
+            loaded.id = id;
+            loaded.builtin = isBuiltinOverride;
+            if (isBuiltinOverride) {
+                loaded.basedOn = id;
+            } else if (item.contains("basedOn") && item["basedOn"].is_string()) {
+                loaded.basedOn = item["basedOn"].get<std::string>();
+            }
+
+            if (item.contains("name") && item["name"].is_string()) {
+                std::string nm = item["name"].get<std::string>();
+                if (!isBuiltinOverride) {
+                    nm = trimWhitespace(nm);
+                    if (nm.empty()) nm = "Custom Preset";
+                    nm = truncateUtf8Codepoints(nm, 40);
+                }
+                loaded.name = std::move(nm);
+            } else if (!isBuiltinOverride) {
+                loaded.name = "Custom Preset";
+            }
+
             if (item.contains("inputTrimDb") && item["inputTrimDb"].is_number()) {
                 const float v = item["inputTrimDb"].get<float>();
                 if (std::isfinite(v)) loaded.inputTrimDb = std::clamp(v, -24.0f, 24.0f);
@@ -438,50 +1083,70 @@ bool PresetBank::loadOverrides(const std::filesystem::path& jsonPath, std::strin
                 if (std::isfinite(v)) loaded.outputLevelDb = std::clamp(v, -60.0f, 24.0f);
             }
 
-            if (item.contains("blocks") && item["blocks"].is_array()) {
-                std::vector<BlockState> newBlocks;
-                int namCount = 0;
-                for (const auto& jb : item["blocks"]) {
-                    if (!jb.is_object() || !jb.contains("type") || !jb["type"].is_string()) continue;
-                    const std::string bType = jb["type"].get<std::string>();
-                    const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(bType);
-                    if (!spec) continue; // ignore unknown block types
-
-                    if (static_cast<int>(newBlocks.size()) >= dsp::kMaxBoardBlocks) break;
-                    if (spec->type == dsp::BlockType::Nam) {
-                        if (namCount >= dsp::kMaxNamBlocks) continue;
-                        ++namCount;
-                    }
-
-                    BlockState bs;
-                    bs.type = spec->id;
-                    if (jb.contains("uid") && jb["uid"].is_string()) {
-                        bs.uid = jb["uid"].get<std::string>();
-                    }
-                    if (jb.contains("enabled") && jb["enabled"].is_boolean()) {
-                        bs.enabled = jb["enabled"].get<bool>();
-                    }
-                    if (spec->usesFile && jb.contains("file") && jb["file"].is_string()) {
-                        bs.file = jb["file"].get<std::string>();
-                    }
-                    if (jb.contains("params") && jb["params"].is_object()) {
-                        for (const auto& [pk, pv] : jb["params"].items()) {
-                            if (pv.is_number()) {
-                                bs.params[pk] = pv.get<float>();
-                            }
-                        }
-                    }
-                    normalizeBlockParams(bs, *spec);
-                    newBlocks.push_back(std::move(bs));
+            if (ver == kPresetFileVersion && item.contains("io") && item["io"].is_object()) {
+                const json& jio = item["io"];
+                if (jio.contains("inX") && jio["inX"].is_number() && std::isfinite(jio["inX"].get<float>())) {
+                    loaded.inX = jio["inX"].get<float>();
                 }
-                loaded.blocks = std::move(newBlocks);
+                if (jio.contains("inY") && jio["inY"].is_number() && std::isfinite(jio["inY"].get<float>())) {
+                    loaded.inY = jio["inY"].get<float>();
+                }
+                if (jio.contains("outX") && jio["outX"].is_number() && std::isfinite(jio["outX"].get<float>())) {
+                    loaded.outX = jio["outX"].get<float>();
+                }
+                if (jio.contains("outY") && jio["outY"].is_number() && std::isfinite(jio["outY"].get<float>())) {
+                    loaded.outY = jio["outY"].get<float>();
+                }
+            }
+
+            if (item.contains("nodes") && item["nodes"].is_array()) {
+                parseBlocksArray(item["nodes"], loaded);
+            } else if (item.contains("blocks") && item["blocks"].is_array()) {
+                parseBlocksArray(item["blocks"], loaded);
             }
 
             const int reqNext = (item.contains("nextUid") && item["nextUid"].is_number_integer())
                                     ? item["nextUid"].get<int>()
                                     : 1;
             sanitizeUidsAndNextUid(loaded, reqNext);
-            *target = std::move(loaded);
+
+            if (ver == 2) {
+                applyRowLayout(loaded);
+            } else {
+                loaded.cables.clear();
+                if (item.contains("cables") && item["cables"].is_array()) {
+                    for (const auto& jc : item["cables"]) {
+                        if (!jc.is_object() || !jc.contains("from") || !jc["from"].is_string() ||
+                            !jc.contains("to") || !jc["to"].is_string()) {
+                            continue;
+                        }
+                        CableState cs;
+                        cs.from = jc["from"].get<std::string>();
+                        cs.to = jc["to"].get<std::string>();
+                        cs.port = (jc.contains("port") && jc["port"].is_number_integer())
+                                      ? jc["port"].get<int>()
+                                      : 0;
+                        std::string cableErr;
+                        if (canAddCable(loaded, cs, cableErr)) {
+                            loaded.cables.push_back(std::move(cs));
+                        }
+                    }
+                }
+            }
+
+            if (isBuiltinOverride) {
+                *existingBuiltin = std::move(loaded);
+            } else {
+                if (findById(loaded.id) != nullptr) {
+                    loaded.id = generateUniqueCustomId();
+                }
+                presets_.push_back(std::move(loaded));
+            }
+        }
+
+        if (ver == 2) {
+            std::string migrateSaveErr;
+            saveOverridesAtomic(jsonPath, migrateSaveErr);
         }
         return true;
     }
@@ -785,6 +1450,7 @@ bool PresetBank::loadOverrides(const std::filesystem::path& jsonPath, std::strin
         }
 
         sanitizeUidsAndNextUid(*p, p->nextUid);
+        applyRowLayout(*p);
     }
 
     std::string migrateSaveErr;
@@ -798,6 +1464,10 @@ bool PresetBank::saveOverridesAtomic(const std::filesystem::path& jsonPath, std:
 
     json presetsArr = json::array();
     for (const auto& cur : presets_) {
+        if (!cur.builtin) {
+            presetsArr.push_back(serializePreset(cur));
+            continue;
+        }
         const Preset* defPtr = nullptr;
         for (const auto& d : defaults) {
             if (d.id == cur.id) {

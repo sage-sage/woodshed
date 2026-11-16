@@ -23,6 +23,13 @@ function utf8ByteLength(str) {
   return new TextEncoder().encode(str).length;
 }
 
+function sanitizeNotation(raw) {
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+  if (raw.format !== 'songsterr') return null;
+  if (!Array.isArray(raw.measures)) return null;
+  return raw;
+}
+
 async function readLibrary() {
   const stored = await chrome.storage.local.get({ [STORAGE_KEY]: [] });
   return Array.isArray(stored[STORAGE_KEY]) ? stored[STORAGE_KEY].slice() : [];
@@ -33,7 +40,11 @@ async function writeLibrary(entries) {
 }
 
 export async function listEntries() {
-  return await readLibrary();
+  const entries = await readLibrary();
+  return entries.map(({ notation, ...rest }) => ({
+    ...rest,
+    hasNotation: Boolean(sanitizeNotation(notation))
+  }));
 }
 
 export async function getEntry(id) {
@@ -46,13 +57,18 @@ export async function saveEntry(data) {
   const entries = await readLibrary();
   const now = Date.now();
   const url = typeof data?.url === 'string' ? data.url.trim() : '';
+  const incomingNotation = sanitizeNotation(data?.notation);
 
   if (url) {
     const existingIndex = entries.findIndex((item) => item && item.url === url);
     if (existingIndex !== -1) {
       const prev = entries[existingIndex];
+      const nextNotation = data.notation !== undefined
+        ? incomingNotation
+        : sanitizeNotation(prev.notation);
+      const { notation: _dropped, ...prevRest } = prev;
       const updatedEntry = {
-        ...prev,
+        ...prevRest,
         title: typeof data.title === 'string' ? data.title.trim() : prev.title,
         artist: typeof data.artist === 'string' ? data.artist.trim() : prev.artist,
         site: typeof data.site === 'string' ? data.site.trim() : prev.site,
@@ -61,6 +77,7 @@ export async function saveEntry(data) {
         capo: data.capo !== undefined ? data.capo : prev.capo,
         bpm: data.bpm !== undefined ? data.bpm : prev.bpm,
         text: typeof data.text === 'string' ? data.text : prev.text,
+        ...(nextNotation ? { notation: nextNotation } : {}),
         updatedAt: now
       };
       entries[existingIndex] = updatedEntry;
@@ -79,6 +96,7 @@ export async function saveEntry(data) {
     capo: data?.capo ?? null,
     bpm: data?.bpm ?? null,
     text: typeof data?.text === 'string' ? data.text : '',
+    ...(incomingNotation ? { notation: incomingNotation } : {}),
     tags: normalizeTags(data?.tags),
     note: typeof data?.note === 'string' ? data.note : '',
     savedAt: now,
@@ -110,6 +128,16 @@ export async function updateEntry(id, patch) {
   }
   if (Object.prototype.hasOwnProperty.call(patch, 'note') && typeof patch.note === 'string') {
     next.note = patch.note;
+  }
+  if (Object.prototype.hasOwnProperty.call(patch, 'notation')) {
+    const cleanNotation = sanitizeNotation(patch.notation);
+    if (cleanNotation) {
+      next.notation = cleanNotation;
+    } else {
+      delete next.notation;
+    }
+  } else if (next.notation !== undefined && !sanitizeNotation(next.notation)) {
+    delete next.notation;
   }
 
   next.updatedAt = Date.now();
@@ -188,6 +216,7 @@ export async function importLibrary(jsonString) {
 
   for (const raw of parsed.entries) {
     if (!isValidImportedEntry(raw)) continue;
+    const cleanNotation = sanitizeNotation(raw.notation);
 
     const cleanEntry = {
       id: raw.id.trim(),
@@ -199,6 +228,7 @@ export async function importLibrary(jsonString) {
       capo: raw.capo ?? null,
       bpm: raw.bpm ?? null,
       text: raw.text,
+      ...(cleanNotation ? { notation: cleanNotation } : {}),
       tags: normalizeTags(raw.tags),
       note: raw.note || '',
       savedAt: Number.isFinite(raw.savedAt) ? raw.savedAt : now,

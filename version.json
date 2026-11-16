@@ -1,21 +1,21 @@
 {
  "site": {
-  "updated": "2026-11-15T17:17:33-08:00"
+  "updated": "2026-11-15T17:49:50-08:00"
  },
  "setup": {
-  "version": "2.1.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.1.0/Woodshed-Setup.exe",
-  "sha256": "cfa906e899387f4f50b6661796d945fdd4f2206e441ae682f4a1679409adc173",
-  "notes": "Woodshed 2.1.0: pedalboard. Build each amp preset from blocks in any order: NAM captures (up to 3), cabinet IRs, the built-in amp and cab, EQ, overdrive, chorus, flanger, phaser, tremolo, auto-wah, delay and reverb (Room or Lush)"
+  "version": "2.2.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.2.0/Woodshed-Setup.exe",
+  "sha256": "39d1373106f58a77dfdaad528617f2b29224c3bce8017edbcc3d415b9697becf",
+  "notes": "Woodshed 2.2.0: Songsterr tabs import with exact rhythm (Tab Grabber 1.3 reads the note data); Pedalboard page with a 2D board, cables, mixer and volume tiles; your own presets (new, duplicate, rename, delete, export, import); update-check screen in the desktop app"
  },
  "amp": {
-  "version": "2.1.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.1.0/woodshed-amp.exe",
-  "sha256": "1932e08a5eb28e397d67f61aea875c5e1ba7d32e3c1053e62451d68255d047c6",
-  "notes": "Woodshed 2.1.0: pedalboard. Build each amp preset from blocks in any order: NAM captures (up to 3), cabinet IRs, the built-in amp and cab, EQ, overdrive, chorus, flanger, phaser, tremolo, auto-wah, delay and reverb (Room or Lush)"
+  "version": "2.2.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.2.0/woodshed-amp.exe",
+  "sha256": "d89a99e7de1588931494c70336092a526765ab9df58b2f16b9e156f172fe9edf",
+  "notes": "Woodshed 2.2.0: Songsterr tabs import with exact rhythm (Tab Grabber 1.3 reads the note data); Pedalboard page with a 2D board, cables, mixer and volume tiles; your own presets (new, duplicate, rename, delete, export, import); update-check screen in the desktop app"
  },
  "extension": {
-  "version": "1.2.0",
+  "version": "1.3.0",
   "url": "downloads/woodshed-tab-grabber.zip"
  }
 }

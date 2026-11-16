@@ -2,7 +2,7 @@ import { tabToAudio, audioToTab, addAnchor, removeAnchor, shiftAll, fromOffsetAn
 import { HOP, SR } from './align.js';
 import { createBackend, parseYouTubeId } from './player.js';
 import { GuideScheduler, resolveGuideTone } from './synth.js';
-import { suggestTone } from './tone-suggest.js';
+import { suggestTone, baseToneId } from './tone-suggest.js';
 import { getAudioContext, resumeAudio } from './audio-context.js';
 
 function formatTime(sec) {
@@ -548,7 +548,7 @@ export function mount(container, ctx) {
 
     // The guide plays with the same sound as the play screen: the song's tone, or the user's Guide sound.
     try {
-      const songTone = record.tone || suggestTone(song)?.id;
+      const songTone = baseToneId(record.tone || suggestTone(song)?.id, ctx.amp?.presets);
       ctx.synth.setTone?.(resolveGuideTone(ctx.settings.get('guideTone'), songTone));
     } catch (_) {
       // Keep whatever tone is set.

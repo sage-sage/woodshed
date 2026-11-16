@@ -9,6 +9,8 @@
 #include <cmath>
 #include <cstdlib>
 #include <fstream>
+#include <queue>
+#include <unordered_set>
 
 #include "json.hpp"
 #include "version.h"
@@ -134,6 +136,95 @@ double round1(double v) noexcept {
 
 double round3(double v) noexcept {
     return std::round(v * 1000.0) / 1000.0;
+}
+
+std::vector<const BlockState*> computeTopologicalBlocks(const Preset& preset) {
+    const size_t n = preset.blocks.size();
+    std::vector<const BlockState*> result;
+    result.reserve(n);
+    if (n == 0) return result;
+
+    std::unordered_map<std::string, size_t> uidToIdx;
+    uidToIdx.reserve(n);
+    for (size_t i = 0; i < n; ++i) {
+        uidToIdx[preset.blocks[i].uid] = i;
+    }
+
+    // 1. Find all block nodes reachable from "in" via cables.
+    std::vector<std::vector<size_t>> fullAdj(n + 1); // index n = "in"
+    for (const auto& c : preset.cables) {
+        size_t u = n + 1;
+        if (c.from == dsp::kInputUid) {
+            u = n;
+        } else if (auto it = uidToIdx.find(c.from); it != uidToIdx.end()) {
+            u = it->second;
+        }
+        if (u > n) continue;
+
+        if (auto it = uidToIdx.find(c.to); it != uidToIdx.end()) {
+            fullAdj[u].push_back(it->second);
+        }
+    }
+
+    std::vector<bool> reachable(n, false);
+    std::queue<size_t> bfs;
+    bfs.push(n);
+    while (!bfs.empty()) {
+        const size_t cur = bfs.front();
+        bfs.pop();
+        for (size_t nxt : fullAdj[cur]) {
+            if (nxt < n && !reachable[nxt]) {
+                reachable[nxt] = true;
+                bfs.push(nxt);
+            }
+        }
+    }
+
+    // 2. Kahn topological sort over reachable nodes.
+    std::vector<std::vector<size_t>> dagAdj(n);
+    std::vector<int> inDegree(n, 0);
+    for (const auto& c : preset.cables) {
+        auto itFrom = uidToIdx.find(c.from);
+        auto itTo = uidToIdx.find(c.to);
+        if (itFrom == uidToIdx.end() || itTo == uidToIdx.end()) continue;
+        const size_t u = itFrom->second;
+        const size_t v = itTo->second;
+        if (u == v || !reachable[u] || !reachable[v]) continue;
+        if (std::find(dagAdj[u].begin(), dagAdj[u].end(), v) == dagAdj[u].end()) {
+            dagAdj[u].push_back(v);
+            ++inDegree[v];
+        }
+    }
+
+    std::priority_queue<size_t, std::vector<size_t>, std::greater<size_t>> ready;
+    for (size_t i = 0; i < n; ++i) {
+        if (reachable[i] && inDegree[i] == 0) {
+            ready.push(i);
+        }
+    }
+
+    std::vector<bool> visited(n, false);
+    while (!ready.empty()) {
+        const size_t u = ready.top();
+        ready.pop();
+        if (visited[u]) continue;
+        visited[u] = true;
+        result.push_back(&preset.blocks[u]);
+        for (size_t v : dagAdj[u]) {
+            if (--inDegree[v] == 0) {
+                ready.push(v);
+            }
+        }
+    }
+
+    // 3. Append any unreachable (or remaining) nodes in preset order.
+    for (size_t i = 0; i < n; ++i) {
+        if (!visited[i]) {
+            result.push_back(&preset.blocks[i]);
+        }
+    }
+
+    return result;
 }
 
 } // namespace
@@ -519,7 +610,13 @@ void AppController::buildAndInstallBoard(const Preset& preset, bool reloadFiles,
     }
     liveBlocks_ = std::move(nextLive);
 
-    auto board = std::make_shared<dsp::Board>(std::move(boardBlocks));
+    std::vector<dsp::Cable> boardCables;
+    boardCables.reserve(preset.cables.size());
+    for (const auto& c : preset.cables) {
+        boardCables.push_back(dsp::Cable{c.from, c.to, c.port});
+    }
+
+    auto board = std::make_shared<dsp::Board>(std::move(boardBlocks), std::move(boardCables));
     if (chain.maxBlock() > 0) {
         board->prepareScratch(chain.maxBlock());
     }
@@ -753,6 +850,7 @@ void AppController::handleCommand(const Command& cmd) {
             if (!bs) break;
 
             bs->file = cmd.text;
+            bs->missingFile.clear();
             if (p->id == currentPresetId_) {
                 buildAndInstallBoard(*p, false, cmd.clientId);
             }
@@ -898,14 +996,497 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
         return;
     }
 
+    if (type == "nodeAdd") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("nodeType") || !msg["nodeType"].is_string() ||
+            !msg.contains("x") || !msg["x"].is_number() ||
+            !msg.contains("y") || !msg["y"].is_number()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeAdd message"));
+            return;
+        }
+        const double rawX = msg["x"].get<double>();
+        const double rawY = msg["y"].get<double>();
+        if (!std::isfinite(rawX) || !std::isfinite(rawY)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeAdd coordinates"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        const std::string nodeType = msg["nodeType"].get<std::string>();
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        std::string addErr;
+        if (!PresetBank::canAddBlock(*p, nodeType, addErr)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson(addErr));
+            return;
+        }
+        const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(nodeType);
+        if (!spec) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block type: " + nodeType));
+            return;
+        }
+
+        bool hasSplice = false;
+        std::string spliceFrom;
+        std::string spliceTo;
+        int splicePort = 0;
+        size_t spliceIdx = 0;
+        if (msg.contains("splice") && !msg["splice"].is_null()) {
+            const json& sp = msg["splice"];
+            if (!sp.is_object() || !sp.contains("from") || !sp["from"].is_string() ||
+                !sp.contains("to") || !sp["to"].is_string()) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeAdd splice"));
+                return;
+            }
+            if (sp.contains("port") && !sp["port"].is_number_integer()) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeAdd splice port"));
+                return;
+            }
+            spliceFrom = sp["from"].get<std::string>();
+            spliceTo = sp["to"].get<std::string>();
+            splicePort = sp.contains("port") ? sp["port"].get<int>() : 0;
+
+            bool foundCable = false;
+            for (size_t i = 0; i < p->cables.size(); ++i) {
+                if (p->cables[i].from == spliceFrom && p->cables[i].to == spliceTo && p->cables[i].port == splicePort) {
+                    spliceIdx = i;
+                    foundCable = true;
+                    break;
+                }
+            }
+            if (!foundCable) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Splice cable not found"));
+                return;
+            }
+            if (static_cast<int>(p->cables.size()) >= dsp::kMaxCables) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Board cannot exceed " + std::to_string(dsp::kMaxCables) + " cables"));
+                return;
+            }
+            hasSplice = true;
+        }
+
+        const std::string newUid = "b" + std::to_string(p->nextUid++);
+        BlockState newBlock = makeDefaultBlockState(*spec, newUid);
+        newBlock.x = static_cast<float>(rawX);
+        newBlock.y = static_cast<float>(rawY);
+        p->blocks.push_back(std::move(newBlock));
+
+        if (hasSplice) {
+            p->cables.erase(p->cables.begin() + static_cast<ptrdiff_t>(spliceIdx));
+            p->cables.push_back(CableState{spliceFrom, newUid, 0});
+            p->cables.push_back(CableState{newUid, spliceTo, splicePort});
+        }
+
+        if (id == currentPresetId_) {
+            buildAndInstallBoard(*p, false, clientId);
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+
+        json reply = {
+            {"type", "nodeAdded"},
+            {"requestId", msg.contains("requestId") ? msg["requestId"] : json(nullptr)},
+            {"id", id},
+            {"uid", newUid}
+        };
+        wsServer_.sendTextToClient(clientId, reply.dump());
+
+        if (spec->usesFile && spec->fileKind) {
+            launchBrowseDialogAsync(clientId, id, spec->fileKind, newUid);
+        }
+        return;
+    }
+
+    if (type == "nodeMove") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("uid") || !msg["uid"].is_string() ||
+            !msg.contains("x") || !msg["x"].is_number() ||
+            !msg.contains("y") || !msg["y"].is_number()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeMove message"));
+            return;
+        }
+        const double rawX = msg["x"].get<double>();
+        const double rawY = msg["y"].get<double>();
+        if (!std::isfinite(rawX) || !std::isfinite(rawY)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeMove coordinates"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        const std::string uid = msg["uid"].get<std::string>();
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        if (uid == dsp::kInputUid) {
+            p->inX = static_cast<float>(rawX);
+            p->inY = static_cast<float>(rawY);
+        } else if (uid == dsp::kOutputUid) {
+            p->outX = static_cast<float>(rawX);
+            p->outY = static_cast<float>(rawY);
+        } else {
+            BlockState* bs = findBlockByUid(*p, uid);
+            if (!bs) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+                return;
+            }
+            bs->x = static_cast<float>(rawX);
+            bs->y = static_cast<float>(rawY);
+        }
+
+        markPresetsDirty();
+        return;
+    }
+
+    if (type == "nodeRemove") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("uid") || !msg["uid"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeRemove message"));
+            return;
+        }
+        if (msg.contains("heal") && !msg["heal"].is_boolean()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid nodeRemove heal flag"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        const std::string uid = msg["uid"].get<std::string>();
+        const bool heal = msg.value("heal", false);
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        auto it = std::find_if(p->blocks.begin(), p->blocks.end(),
+                               [&](const BlockState& b) { return b.uid == uid; });
+        if (it == p->blocks.end()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+            return;
+        }
+
+        std::vector<std::string> port0Sources;
+        std::vector<std::pair<std::string, int>> outputs;
+        if (heal) {
+            for (const auto& c : p->cables) {
+                if (c.to == uid && c.port == 0) {
+                    port0Sources.push_back(c.from);
+                }
+                if (c.from == uid) {
+                    outputs.emplace_back(c.to, c.port);
+                }
+            }
+        }
+
+        p->cables.erase(std::remove_if(p->cables.begin(), p->cables.end(),
+                                       [&](const CableState& c) { return c.from == uid || c.to == uid; }),
+                        p->cables.end());
+        p->blocks.erase(it);
+
+        if (heal) {
+            for (const auto& src : port0Sources) {
+                for (const auto& [dstTo, dstPort] : outputs) {
+                    CableState healed{src, dstTo, dstPort};
+                    std::string cableErr;
+                    if (PresetBank::canAddCable(*p, healed, cableErr)) {
+                        p->cables.push_back(std::move(healed));
+                    }
+                }
+            }
+        }
+
+        if (id == currentPresetId_) {
+            buildAndInstallBoard(*p, false, clientId);
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "cableAdd") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("from") || !msg["from"].is_string() ||
+            !msg.contains("to") || !msg["to"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid cableAdd message"));
+            return;
+        }
+        if (msg.contains("port") && !msg["port"].is_number_integer()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid cableAdd port"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        CableState cs;
+        cs.from = msg["from"].get<std::string>();
+        cs.to = msg["to"].get<std::string>();
+        cs.port = msg.contains("port") ? msg["port"].get<int>() : 0;
+
+        std::string cableErr;
+        if (!PresetBank::canAddCable(*p, cs, cableErr)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson(cableErr));
+            return;
+        }
+
+        p->cables.push_back(std::move(cs));
+
+        if (id == currentPresetId_) {
+            buildAndInstallBoard(*p, false, clientId);
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "cableRemove") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("from") || !msg["from"].is_string() ||
+            !msg.contains("to") || !msg["to"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid cableRemove message"));
+            return;
+        }
+        if (msg.contains("port") && !msg["port"].is_number_integer()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid cableRemove port"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        const std::string from = msg["from"].get<std::string>();
+        const std::string to = msg["to"].get<std::string>();
+        const int port = msg.contains("port") ? msg["port"].get<int>() : 0;
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        auto it = std::find_if(p->cables.begin(), p->cables.end(), [&](const CableState& c) {
+            return c.from == from && c.to == to && c.port == port;
+        });
+        if (it == p->cables.end()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Cable not found"));
+            return;
+        }
+
+        p->cables.erase(it);
+
+        if (id == currentPresetId_) {
+            buildAndInstallBoard(*p, false, clientId);
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "presetNew") {
+        if (msg.contains("name") && !msg["name"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid presetNew name"));
+            return;
+        }
+        if (presetBank_.customPresetCount() >= PresetBank::kMaxCustomPresets) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Maximum of " + std::to_string(PresetBank::kMaxCustomPresets) + " custom presets reached"));
+            return;
+        }
+
+        const std::string reqName = msg.contains("name") ? msg["name"].get<std::string>() : "New Preset";
+        Preset& created = presetBank_.createCustom(reqName, "");
+
+        savePresetsNow();
+        refreshTraySnapshot(audioEngine_.getStatus());
+
+        json reply = {
+            {"type", "presetCreated"},
+            {"requestId", msg.contains("requestId") ? msg["requestId"] : json(nullptr)},
+            {"id", created.id}
+        };
+        wsServer_.sendTextToClient(clientId, reply.dump());
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "presetDuplicate") {
+        if (!msg.contains("id") || !msg["id"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid presetDuplicate message"));
+            return;
+        }
+        if (msg.contains("name") && !msg["name"].is_null() && !msg["name"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid presetDuplicate name"));
+            return;
+        }
+
+        const std::string sourceId = msg["id"].get<std::string>();
+        const std::string reqName = (msg.contains("name") && msg["name"].is_string()) ? msg["name"].get<std::string>() : "";
+
+        std::string dupErr;
+        Preset* dup = presetBank_.duplicatePreset(sourceId, reqName, dupErr);
+        if (!dup) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson(dupErr));
+            return;
+        }
+
+        savePresetsNow();
+        refreshTraySnapshot(audioEngine_.getStatus());
+
+        json reply = {
+            {"type", "presetCreated"},
+            {"requestId", msg.contains("requestId") ? msg["requestId"] : json(nullptr)},
+            {"id", dup->id}
+        };
+        wsServer_.sendTextToClient(clientId, reply.dump());
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "presetRename") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("name") || !msg["name"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid presetRename message"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        const std::string newName = msg["name"].get<std::string>();
+
+        std::string renErr;
+        if (!presetBank_.renamePreset(id, newName, renErr)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson(renErr));
+            return;
+        }
+
+        savePresetsNow();
+        refreshTraySnapshot(audioEngine_.getStatus());
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "presetDelete") {
+        if (!msg.contains("id") || !msg["id"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid presetDelete message"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        const Preset* target = presetBank_.findById(id);
+        if (!target) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+        if (target->builtin) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Built-in presets cannot be deleted"));
+            return;
+        }
+
+        const bool wasActive = (id == currentPresetId_);
+        if (wasActive) {
+            std::string fallbackId = "clean";
+            if (!target->basedOn.empty() && target->basedOn != id && presetBank_.findById(target->basedOn) != nullptr) {
+                fallbackId = target->basedOn;
+            } else if (presetBank_.findById("clean") == nullptr && !presetBank_.presets().empty()) {
+                for (const auto& cand : presetBank_.presets()) {
+                    if (cand.id != id) {
+                        fallbackId = cand.id;
+                        break;
+                    }
+                }
+            }
+
+            currentPresetId_ = fallbackId;
+            settings_.lastPreset = fallbackId;
+            liveBlocks_.clear();
+            loadedBlockFiles_.clear();
+            blockLoadErrors_.clear();
+            if (const Preset* fb = presetBank_.findById(fallbackId)) {
+                buildAndInstallBoard(*fb, true, clientId);
+            }
+            saveSettingsAtomic();
+        }
+
+        std::string delErr;
+        presetBank_.removePreset(id, delErr);
+        savePresetsNow();
+
+        const AudioStatus st = audioEngine_.getStatus();
+        refreshTraySnapshot(st);
+        wsServer_.broadcastText(buildPresetsJson());
+        if (wasActive) {
+            wsServer_.broadcastText(buildStatusJson(st));
+        }
+        return;
+    }
+
+    if (type == "presetImport") {
+        if (!msg.contains("preset") || !msg["preset"].is_object()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid presetImport message"));
+            return;
+        }
+        if (presetBank_.customPresetCount() >= PresetBank::kMaxCustomPresets) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Maximum of " + std::to_string(PresetBank::kMaxCustomPresets) + " custom presets reached"));
+            return;
+        }
+
+        std::string impErr;
+        std::optional<Preset> imported = PresetBank::fromExportJson(msg["preset"], impErr);
+        if (!imported.has_value()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson(impErr));
+            return;
+        }
+
+        Preset& added = presetBank_.addCustomPreset(std::move(*imported));
+        savePresetsNow();
+        refreshTraySnapshot(audioEngine_.getStatus());
+
+        json reply = {
+            {"type", "presetCreated"},
+            {"requestId", msg.contains("requestId") ? msg["requestId"] : json(nullptr)},
+            {"id", added.id}
+        };
+        wsServer_.sendTextToClient(clientId, reply.dump());
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "presetExport") {
+        if (!msg.contains("id") || !msg["id"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid presetExport message"));
+            return;
+        }
+        const std::string id = msg["id"].get<std::string>();
+        const Preset* p = presetBank_.findById(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        json reply = {
+            {"type", "presetExportData"},
+            {"requestId", msg.contains("requestId") ? msg["requestId"] : json(nullptr)},
+            {"data", PresetBank::toExportJson(*p)}
+        };
+        wsServer_.sendTextToClient(clientId, reply.dump());
+        return;
+    }
+
     if (type == "blockAdd") {
         if (!msg.contains("id") || !msg["id"].is_string() ||
             !msg.contains("blockType") || !msg["blockType"].is_string()) {
             wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockAdd message"));
-            return;
-        }
-        if (msg.contains("index") && !msg["index"].is_null() && !msg["index"].is_number_integer()) {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockAdd index"));
             return;
         }
 
@@ -930,14 +1511,40 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
             return;
         }
 
+        auto outCableIt = std::find_if(p->cables.begin(), p->cables.end(), [](const CableState& c) {
+            return c.to == dsp::kOutputUid;
+        });
+        const int extraCablesNeeded = (outCableIt != p->cables.end()) ? 1 : 2;
+        if (static_cast<int>(p->cables.size()) + extraCablesNeeded > dsp::kMaxCables) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Board cannot exceed " + std::to_string(dsp::kMaxCables) + " cables"));
+            return;
+        }
+
+        float maxX = p->inX;
+        for (const auto& b : p->blocks) {
+            maxX = std::max(maxX, b.x);
+        }
+
         const std::string newUid = "b" + std::to_string(p->nextUid++);
         BlockState newBlock = makeDefaultBlockState(*spec, newUid);
-
-        int insertIdx = static_cast<int>(p->blocks.size());
-        if (msg.contains("index") && msg["index"].is_number_integer()) {
-            insertIdx = std::clamp(msg["index"].get<int>(), 0, static_cast<int>(p->blocks.size()));
+        newBlock.x = maxX + 9.0f;
+        newBlock.y = 5.0f;
+        if (p->outX <= newBlock.x + 4.0f) {
+            p->outX = newBlock.x + 9.0f;
         }
-        p->blocks.insert(p->blocks.begin() + insertIdx, std::move(newBlock));
+
+        if (outCableIt != p->cables.end()) {
+            const std::string prevFrom = outCableIt->from;
+            const int prevPort = outCableIt->port;
+            p->cables.erase(outCableIt);
+            p->cables.push_back(CableState{prevFrom, newUid, 0});
+            p->cables.push_back(CableState{newUid, dsp::kOutputUid, prevPort});
+        } else {
+            p->cables.push_back(CableState{dsp::kInputUid, newUid, 0});
+            p->cables.push_back(CableState{newUid, dsp::kOutputUid, 0});
+        }
+
+        p->blocks.push_back(std::move(newBlock));
 
         if (id == currentPresetId_) {
             buildAndInstallBoard(*p, false, clientId);
@@ -974,7 +1581,32 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
             return;
         }
 
+        std::vector<std::string> port0Sources;
+        std::vector<std::pair<std::string, int>> outputs;
+        for (const auto& c : p->cables) {
+            if (c.to == uid && c.port == 0) {
+                port0Sources.push_back(c.from);
+            }
+            if (c.from == uid) {
+                outputs.emplace_back(c.to, c.port);
+            }
+        }
+
+        p->cables.erase(std::remove_if(p->cables.begin(), p->cables.end(),
+                                       [&](const CableState& c) { return c.from == uid || c.to == uid; }),
+                        p->cables.end());
         p->blocks.erase(it);
+
+        for (const auto& src : port0Sources) {
+            for (const auto& [dstTo, dstPort] : outputs) {
+                CableState healed{src, dstTo, dstPort};
+                std::string cableErr;
+                if (PresetBank::canAddCable(*p, healed, cableErr)) {
+                    p->cables.push_back(std::move(healed));
+                }
+            }
+        }
+
         if (id == currentPresetId_) {
             buildAndInstallBoard(*p, false, clientId);
         }
@@ -985,47 +1617,7 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
     }
 
     if (type == "blockMove") {
-        if (!msg.contains("id") || !msg["id"].is_string() ||
-            !msg.contains("uid") || !msg["uid"].is_string() ||
-            !msg.contains("index") || !msg["index"].is_number_integer()) {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockMove message"));
-            return;
-        }
-        const std::string id = msg["id"].get<std::string>();
-        const std::string uid = msg["uid"].get<std::string>();
-        const int requestedIdx = msg["index"].get<int>();
-
-        Preset* p = presetBank_.findByIdMutable(id);
-        if (!p) {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
-            return;
-        }
-
-        int fromIdx = -1;
-        for (int i = 0; i < static_cast<int>(p->blocks.size()); ++i) {
-            if (p->blocks[static_cast<size_t>(i)].uid == uid) {
-                fromIdx = i;
-                break;
-            }
-        }
-        if (fromIdx < 0) {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
-            return;
-        }
-
-        const int toIdx = std::clamp(requestedIdx, 0, static_cast<int>(p->blocks.size()) - 1);
-        if (fromIdx != toIdx) {
-            BlockState moved = std::move(p->blocks[static_cast<size_t>(fromIdx)]);
-            p->blocks.erase(p->blocks.begin() + fromIdx);
-            p->blocks.insert(p->blocks.begin() + toIdx, std::move(moved));
-        }
-
-        if (id == currentPresetId_) {
-            buildAndInstallBoard(*p, false, clientId);
-        }
-
-        savePresetsNow();
-        wsServer_.broadcastText(buildPresetsJson());
+        wsServer_.sendTextToClient(clientId, buildErrorJson("Use the Pedalboard page to move tiles"));
         return;
     }
 
@@ -1178,6 +1770,11 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
             return;
         }
 
+        if (!target->builtin) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Only built-in presets can be reset"));
+            return;
+        }
+
         PresetBank freshDefaults;
         if (const Preset* def = freshDefaults.findById(id)) {
             *target = *def;
@@ -1263,17 +1860,31 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
             }
             targetUid = "b" + std::to_string(p->nextUid++);
             BlockState newBlock = makeDefaultBlockState(*spec, targetUid);
-            if (kind == "nam") {
-                p->blocks.insert(p->blocks.begin(), std::move(newBlock));
-            } else {
-                size_t insertPos = 0;
-                for (size_t i = 0; i < p->blocks.size(); ++i) {
-                    if (p->blocks[i].type == "amp" || p->blocks[i].type == "nam") {
-                        insertPos = i + 1;
-                    }
-                }
-                p->blocks.insert(p->blocks.begin() + static_cast<ptrdiff_t>(insertPos), std::move(newBlock));
+            float maxX = p->inX;
+            for (const auto& b : p->blocks) {
+                maxX = std::max(maxX, b.x);
             }
+            newBlock.x = maxX + 9.0f;
+            newBlock.y = 5.0f;
+            if (p->outX <= newBlock.x + 4.0f) {
+                p->outX = newBlock.x + 9.0f;
+            }
+
+            auto outCableIt = std::find_if(p->cables.begin(), p->cables.end(), [](const CableState& c) {
+                return c.to == dsp::kOutputUid;
+            });
+            if (outCableIt != p->cables.end() && static_cast<int>(p->cables.size()) < dsp::kMaxCables) {
+                const std::string prevFrom = outCableIt->from;
+                const int prevPort = outCableIt->port;
+                p->cables.erase(outCableIt);
+                p->cables.push_back(CableState{prevFrom, targetUid, 0});
+                p->cables.push_back(CableState{targetUid, dsp::kOutputUid, prevPort});
+            } else if (static_cast<int>(p->cables.size()) + 2 <= dsp::kMaxCables) {
+                p->cables.push_back(CableState{dsp::kInputUid, targetUid, 0});
+                p->cables.push_back(CableState{targetUid, dsp::kOutputUid, 0});
+            }
+
+            p->blocks.push_back(std::move(newBlock));
 
             if (id == currentPresetId_) {
                 buildAndInstallBoard(*p, false, clientId);
@@ -1331,6 +1942,7 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
 
         if (targetBlock) {
             targetBlock->file.clear();
+            targetBlock->missingFile.clear();
             loadedBlockFiles_.erase(targetBlock->uid);
             blockLoadErrors_.erase(targetBlock->uid);
             if (id == currentPresetId_) {
@@ -1470,7 +2082,7 @@ std::string AppController::buildHelloJson() const {
         {"app", "woodshed-amp"},
         {"version", kAmpVersion},
         {"protocol", 1},
-        {"features", json::array({"board"})}
+        {"features", json::array({"board", "graph", "customPresets"})}
     };
     return j.dump();
 }
@@ -1481,6 +2093,8 @@ std::string AppController::buildPresetsJson() const {
         json item = json::object();
         item["id"] = p.id;
         item["name"] = p.name;
+        item["builtin"] = p.builtin;
+        item["basedOn"] = p.basedOn;
 
         std::string firstNamFile;
         std::string firstIrFile;
@@ -1526,7 +2140,7 @@ std::string AppController::buildPresetsJson() const {
             {"outputLevelDb", p.outputLevelDb}
         };
 
-        json boardBlocks = json::array();
+        json graphNodes = json::array();
         for (const auto& b : p.blocks) {
             json bParams = json::object();
             for (const auto& [k, v] : b.params) {
@@ -1535,6 +2149,59 @@ std::string AppController::buildPresetsJson() const {
             json fileVal = nullptr;
             if (!b.file.empty()) {
                 fileVal = wideToUtf8(std::filesystem::path(utf8ToWide(b.file)).filename().wstring());
+            } else if (!b.missingFile.empty()) {
+                fileVal = b.missingFile;
+            }
+            json nodeObj = {
+                {"uid", b.uid},
+                {"type", b.type},
+                {"enabled", b.enabled},
+                {"params", std::move(bParams)},
+                {"file", std::move(fileVal)},
+                {"x", b.x},
+                {"y", b.y}
+            };
+            if (!b.missingFile.empty()) {
+                nodeObj["missing"] = true;
+            }
+            graphNodes.push_back(std::move(nodeObj));
+        }
+
+        json graphCables = json::array();
+        for (const auto& c : p.cables) {
+            graphCables.push_back({
+                {"from", c.from},
+                {"to", c.to},
+                {"port", c.port}
+            });
+        }
+
+        item["graph"] = {
+            {"inputTrimDb", p.inputTrimDb},
+            {"gateThresholdDb", p.gateThresholdDb},
+            {"outputLevelDb", p.outputLevelDb},
+            {"io", {
+                {"inX", p.inX},
+                {"inY", p.inY},
+                {"outX", p.outX},
+                {"outY", p.outY}
+            }},
+            {"nodes", std::move(graphNodes)},
+            {"cables", std::move(graphCables)}
+        };
+
+        json boardBlocks = json::array();
+        for (const BlockState* bp : computeTopologicalBlocks(p)) {
+            const BlockState& b = *bp;
+            json bParams = json::object();
+            for (const auto& [k, v] : b.params) {
+                bParams[k] = v;
+            }
+            json fileVal = nullptr;
+            if (!b.file.empty()) {
+                fileVal = wideToUtf8(std::filesystem::path(utf8ToWide(b.file)).filename().wstring());
+            } else if (!b.missingFile.empty()) {
+                fileVal = b.missingFile;
             }
             boardBlocks.push_back({
                 {"uid", b.uid},
@@ -1578,6 +2245,7 @@ std::string AppController::buildPresetsJson() const {
             {"id", bt.id ? bt.id : ""},
             {"name", bt.name ? bt.name : ""},
             {"category", bt.category ? bt.category : ""},
+            {"inputs", bt.inputs},
             {"usesFile", bt.usesFile},
             {"fileKind", bt.fileKind ? json(bt.fileKind) : json(nullptr)},
             {"params", std::move(paramsArr)}
@@ -1591,7 +2259,9 @@ std::string AppController::buildPresetsJson() const {
         {"blockTypes", std::move(blockTypes)},
         {"limits", {
             {"maxBlocks", dsp::kMaxBoardBlocks},
-            {"maxNam", dsp::kMaxNamBlocks}
+            {"maxNam", dsp::kMaxNamBlocks},
+            {"maxCables", dsp::kMaxCables},
+            {"maxCustomPresets", PresetBank::kMaxCustomPresets}
         }}
     };
     return j.dump();

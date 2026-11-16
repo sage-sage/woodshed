@@ -76,6 +76,14 @@ function isLeadSingleNote(n) {
   return tech === 'bend' || tech === 'vib' || tech === 'vibrato' || tech === 'slide' || tech === 'sl';
 }
 
+/** A custom amp preset (Woodshed Amp 2.2+, id "u_...") maps to the built-in it was copied from, so the guide
+ *  synth and other built-in-only features can follow it. Built-in ids pass through unchanged. */
+export function baseToneId(id, ampPresets) {
+  if (!id || TONE_NAMES[id]) return id;
+  const p = ampPresets?.list?.find((x) => x?.id === id);
+  return (p && p.basedOn && TONE_NAMES[p.basedOn]) ? p.basedOn : id;
+}
+
 export function suggestTone(song) {
   const safeSong = song || {};
   const tuning = Array.isArray(safeSong.tuning) && safeSong.tuning.length > 0

@@ -467,6 +467,9 @@ export class AmpLink extends EventTarget {
         limits: msg.limits || null
       };
       this._emit('presets', this.presets);
+    } else if (msg.type === 'nodeAdded' || msg.type === 'presetCreated' || msg.type === 'presetExportData') {
+      // Replies to this page's own requests (Woodshed Amp 2.2+ pedalboard), matched by requestId.
+      this._emit(msg.type, msg);
     } else if (msg.type === 'devices') {
       this.devices = {
         current: typeof msg.current === 'string' ? msg.current : (msg.current ?? null),
@@ -622,6 +625,72 @@ export class AmpLink extends EventTarget {
 
   moveBlock(id, uid, index) {
     return this._send({ type: 'blockMove', id: String(id), uid: String(uid), index: Number(index) });
+  }
+
+  // ---- Woodshed Amp 2.2+: 2D pedalboard graph and custom presets (see the protocol in woodshed-amp) ----
+  _request(payload) {
+    const requestId = `r${Date.now().toString(36)}${Math.random().toString(36).slice(2, 7)}`;
+    this._send({ ...payload, requestId });
+    return requestId;
+  }
+
+  /** Resolves with the reply of `type` carrying our requestId, or null after `timeoutMs`. */
+  request(payload, type, timeoutMs = 8000) {
+    return new Promise((resolve) => {
+      const requestId = this._request(payload);
+      const onReply = (e) => {
+        if (e.detail?.requestId !== requestId) return;
+        clearTimeout(timer);
+        this.removeEventListener(type, onReply);
+        resolve(e.detail);
+      };
+      const timer = setTimeout(() => { this.removeEventListener(type, onReply); resolve(null); }, timeoutMs);
+      this.addEventListener(type, onReply);
+    });
+  }
+
+  addNode(id, nodeType, x, y, splice) {
+    return this.request({ type: 'nodeAdd', id: String(id), nodeType: String(nodeType), x: Number(x), y: Number(y), ...(splice ? { splice } : {}) }, 'nodeAdded');
+  }
+
+  moveNode(id, uid, x, y) {
+    return this._send({ type: 'nodeMove', id: String(id), uid: String(uid), x: Number(x), y: Number(y) });
+  }
+
+  removeNode(id, uid, heal = true) {
+    return this._send({ type: 'nodeRemove', id: String(id), uid: String(uid), heal: Boolean(heal) });
+  }
+
+  addCable(id, from, to, port = 0) {
+    return this._send({ type: 'cableAdd', id: String(id), from: String(from), to: String(to), port: Number(port) });
+  }
+
+  removeCable(id, from, to, port = 0) {
+    return this._send({ type: 'cableRemove', id: String(id), from: String(from), to: String(to), port: Number(port) });
+  }
+
+  newPreset(name) {
+    return this.request({ type: 'presetNew', name: String(name || 'My preset') }, 'presetCreated');
+  }
+
+  duplicatePreset(id, name) {
+    return this.request({ type: 'presetDuplicate', id: String(id), ...(name ? { name: String(name) } : {}) }, 'presetCreated');
+  }
+
+  renamePreset(id, name) {
+    return this._send({ type: 'presetRename', id: String(id), name: String(name) });
+  }
+
+  deletePreset(id) {
+    return this._send({ type: 'presetDelete', id: String(id) });
+  }
+
+  importPreset(preset) {
+    return this.request({ type: 'presetImport', preset }, 'presetCreated');
+  }
+
+  exportPreset(id) {
+    return this.request({ type: 'presetExport', id: String(id) }, 'presetExportData');
   }
 
   setBoardGlobal(id, key, value) {

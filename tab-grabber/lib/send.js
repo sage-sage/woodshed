@@ -21,6 +21,7 @@ export async function sendToWoodshed(payload) {
     capo: payload.capo ?? 0,
     bpm: payload.bpm ?? null,
     text: payload.text || '',
+    ...(payload.notation ? { notation: payload.notation } : {}),
     source: payload.source || payload.site || 'web',
     url: payload.url || '',
     ts: Date.now()

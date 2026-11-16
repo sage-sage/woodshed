@@ -127,3 +127,83 @@ export function mountTitleBar() {
   window.addEventListener('hashchange', () => setTimeout(syncTitle, 50));
   setTimeout(syncTitle, 300);
 }
+
+/** The "checking for updates" screen (desktop app): a modal that follows updateState until the user hides it.
+ *  check() starts the check (the function wireDesktopUpdates returned). */
+export function openUpdateDialog(check) {
+  if (!isDesktop) return;
+  document.getElementById('ws-update-dialog')?.remove();
+  const root = document.createElement('div');
+  root.id = 'ws-update-dialog';
+  root.className = 'ws-update-overlay';
+  root.innerHTML = `
+    <section class="ws-update-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-update-title">
+      <header class="ws-update-head"><span>Woodshed for Windows</span><span>v${desktop.version}</span></header>
+      <div class="ws-update-body">
+        <div class="ws-update-mark" aria-hidden="true">✦</div>
+        <h2 id="ws-update-title" class="ws-update-title"></h2>
+        <p class="ws-update-text"></p>
+        <div class="ws-update-bar" aria-hidden="true"><span></span></div>
+        <ol class="ws-update-steps">
+          <li data-step="reach"><span>Reach the update server</span><b></b></li>
+          <li data-step="compare"><span>Compare versions</span><b></b></li>
+          <li data-step="install"><span>Download and install</span><b></b></li>
+        </ol>
+      </div>
+      <footer class="ws-update-foot">
+        <button type="button" class="ws-update-btn" data-act="close">Hide</button>
+        <button type="button" class="ws-update-btn is-primary" data-act="primary" hidden></button>
+      </footer>
+    </section>`;
+  document.body.appendChild(root);
+  const $ = (sel) => root.querySelector(sel);
+  const step = (name, label, state) => {
+    const li = root.querySelector(`[data-step="${name}"]`);
+    li.className = state || '';
+    li.querySelector('b').textContent = label;
+  };
+  const onKey = (e) => {
+    if (e.key === 'Escape') { e.preventDefault(); close(); }
+  };
+  function close() {
+    window.removeEventListener('woodshed-update', render);
+    document.removeEventListener('keydown', onKey, true);
+    root.remove();
+  }
+  function render() {
+    const st = updateState;
+    const primary = $('[data-act="primary"]');
+    root.dataset.state = st.status;
+    primary.hidden = true;
+    if (st.status === 'checking' || st.status === 'idle') {
+      $('.ws-update-title').textContent = 'Checking for updates';
+      $('.ws-update-text').textContent = 'Looking for a newer Woodshed on GitHub. This takes a second or two.';
+      step('reach', '…', 'is-active'); step('compare', '', ''); step('install', 'If newer', 'is-dim');
+    } else if (st.status === 'none') {
+      $('.ws-update-title').textContent = 'You’re up to date';
+      $('.ws-update-text').textContent = `Woodshed ${desktop.version} is the latest version.`;
+      step('reach', 'Done', 'is-done'); step('compare', 'Same version', 'is-done'); step('install', 'Not needed', 'is-dim');
+      primary.hidden = false; primary.textContent = 'Check again'; primary.onclick = () => check?.();
+    } else if (st.status === 'available') {
+      $('.ws-update-title').textContent = `Woodshed ${st.version} is ready`;
+      $('.ws-update-text').textContent = `You have ${desktop.version}. Updating closes Woodshed, installs the new version and opens it again.`;
+      step('reach', 'Done', 'is-done'); step('compare', `${st.version} is newer`, 'is-done'); step('install', 'Waiting for you', 'is-active');
+      primary.hidden = false; primary.textContent = `Update to ${st.version}`; primary.onclick = () => installUpdate();
+    } else if (st.status === 'installing') {
+      $('.ws-update-title').textContent = 'Updating…';
+      $('.ws-update-text').textContent = 'Downloading the update. Woodshed closes, installs it and opens again by itself.';
+      step('reach', 'Done', 'is-done'); step('compare', 'Done', 'is-done'); step('install', '…', 'is-active');
+    } else if (st.status === 'failed') {
+      $('.ws-update-title').textContent = 'Couldn’t check for updates';
+      $('.ws-update-text').textContent = `${st.error}. You have Woodshed ${desktop.version}.`;
+      step('reach', 'Failed', 'is-bad'); step('compare', '', 'is-dim'); step('install', '', 'is-dim');
+      primary.hidden = false; primary.textContent = 'Try again'; primary.onclick = () => check?.();
+    }
+  }
+  $('[data-act="close"]').addEventListener('click', close);
+  root.addEventListener('click', (e) => { if (e.target === root) close(); });
+  document.addEventListener('keydown', onKey, true);
+  window.addEventListener('woodshed-update', render);
+  render();
+  $('[data-act="close"]').focus();
+}

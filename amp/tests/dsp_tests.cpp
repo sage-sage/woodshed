@@ -183,7 +183,16 @@ std::shared_ptr<wsamp::dsp::Board> makeMetalBoard() {
     rev->setParam(3, 0.15f);
 
     return std::make_shared<wsamp::dsp::Board>(
-        std::vector<std::shared_ptr<wsamp::dsp::Block>>{od, amp, cab, eq, dly, rev});
+        std::vector<std::shared_ptr<wsamp::dsp::Block>>{od, amp, cab, eq, dly, rev},
+        std::vector<wsamp::dsp::Cable>{
+            {wsamp::dsp::kInputUid, "od1", 0},
+            {"od1", "amp1", 0},
+            {"amp1", "cab1", 0},
+            {"cab1", "eq1", 0},
+            {"eq1", "dly1", 0},
+            {"dly1", "rev1", 0},
+            {"rev1", wsamp::dsp::kOutputUid, 0},
+        });
 }
 
 void testPresetBoards() {
@@ -198,7 +207,12 @@ void testPresetBoards() {
     auto cleanCab = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Cab, "cab_clean");
     cleanCab->setParam(0, 2.0f);
     auto cleanBoard = std::make_shared<wsamp::dsp::Board>(
-        std::vector<std::shared_ptr<wsamp::dsp::Block>>{cleanAmp, cleanCab});
+        std::vector<std::shared_ptr<wsamp::dsp::Block>>{cleanAmp, cleanCab},
+        std::vector<wsamp::dsp::Cable>{
+            {wsamp::dsp::kInputUid, "amp_clean", 0},
+            {"amp_clean", "cab_clean", 0},
+            {"cab_clean", wsamp::dsp::kOutputUid, 0},
+        });
 
     std::vector<std::shared_ptr<wsamp::dsp::Board>> boards = {cleanBoard, makeMetalBoard()};
 
@@ -457,7 +471,12 @@ void testPedalboardCatalogAndBlocks() {
         od->setEnabled(false);
         od->prepare(kSampleRate, kBlock);
 
-        wsamp::dsp::Board board({od});
+        wsamp::dsp::Board board(
+            {od},
+            {
+                {wsamp::dsp::kInputUid, "od_dis", 0},
+                {"od_dis", wsamp::dsp::kOutputUid, 0},
+            });
         board.prepareScratch(kBlock);
 
         for (int off = 0; off < 4800; off += kBlock) {
@@ -502,7 +521,11 @@ void testPedalboardCatalogAndBlocks() {
         chain.installBoard(nullptr);
         checkTransparent();
 
-        auto emptyBoard = std::make_shared<wsamp::dsp::Board>(std::vector<std::shared_ptr<wsamp::dsp::Block>>{});
+        auto emptyBoard = std::make_shared<wsamp::dsp::Board>(
+            std::vector<std::shared_ptr<wsamp::dsp::Block>>{},
+            std::vector<wsamp::dsp::Cable>{
+                {wsamp::dsp::kInputUid, wsamp::dsp::kOutputUid, 0},
+            });
         chain.installBoard(emptyBoard);
         checkTransparent();
     }
@@ -529,12 +552,20 @@ void testPedalboardCatalogAndBlocks() {
 
         for (int iter = 0; iter < 50; ++iter) {
             auto b1 = std::make_shared<wsamp::dsp::Board>(
-                std::vector<std::shared_ptr<wsamp::dsp::Block>>{wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Chorus, "c1")});
+                std::vector<std::shared_ptr<wsamp::dsp::Block>>{wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Chorus, "c1")},
+                std::vector<wsamp::dsp::Cable>{
+                    {wsamp::dsp::kInputUid, "c1", 0},
+                    {"c1", wsamp::dsp::kOutputUid, 0},
+                });
             chain.installBoard(b1);
             chain.reclaim();
 
             auto b2 = std::make_shared<wsamp::dsp::Board>(
-                std::vector<std::shared_ptr<wsamp::dsp::Block>>{wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Delay, "d1")});
+                std::vector<std::shared_ptr<wsamp::dsp::Block>>{wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Delay, "d1")},
+                std::vector<wsamp::dsp::Cable>{
+                    {wsamp::dsp::kInputUid, "d1", 0},
+                    {"d1", wsamp::dsp::kOutputUid, 0},
+                });
             chain.installBoard(b2);
             chain.reclaim();
         }
@@ -550,6 +581,176 @@ void testPedalboardCatalogAndBlocks() {
     }
 }
 
+void testSignalGraph() {
+    constexpr double kSampleRate = 48000.0;
+    constexpr int kBlock = 64;
+
+    std::array<float, kBlock> in{};
+    for (int i = 0; i < kBlock; ++i) {
+        in[i] = 0.3f * static_cast<float>(std::sin(2.0 * kPi * 440.0 * static_cast<double>(i) / kSampleRate));
+    }
+
+    // (a) in->out with no blocks is transparent; no cable to out gives silence
+    {
+        wsamp::dsp::Board through(
+            {},
+            {{wsamp::dsp::kInputUid, wsamp::dsp::kOutputUid, 0}});
+        CHECK(through.valid());
+        through.prepareScratch(kBlock);
+        auto buf = in;
+        through.process(buf.data(), kBlock);
+        for (int i = 0; i < kBlock; ++i) {
+            CHECK(buf[i] == in[i]);
+        }
+
+        wsamp::dsp::Board silent({}, {});
+        CHECK(silent.valid());
+        silent.prepareScratch(kBlock);
+        buf = in;
+        silent.process(buf.data(), kBlock);
+        for (int i = 0; i < kBlock; ++i) {
+            CHECK(buf[i] == 0.0f);
+        }
+    }
+
+    // (b) parallel paths: two +0 dB Volume blocks give 2x input
+    {
+        auto v1 = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "v1");
+        auto v2 = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "v2");
+        v1->prepare(kSampleRate, kBlock);
+        v2->prepare(kSampleRate, kBlock);
+
+        wsamp::dsp::Board parallel(
+            {v1, v2},
+            {
+                {wsamp::dsp::kInputUid, "v1", 0},
+                {"v1", wsamp::dsp::kOutputUid, 0},
+                {wsamp::dsp::kInputUid, "v2", 0},
+                {"v2", wsamp::dsp::kOutputUid, 0},
+            });
+        CHECK(parallel.valid());
+        parallel.prepareScratch(kBlock);
+
+        auto buf = in;
+        parallel.process(buf.data(), kBlock);
+        for (int i = 0; i < kBlock; ++i) {
+            CHECK(std::abs(buf[i] - 2.0f * in[i]) < 1e-5f);
+        }
+    }
+
+    // (c) mixer: A = in, B = in through Volume(-60 dB); balance 0 -> input, balance 1 -> 0.001 * input
+    {
+        auto volB = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "vol_b");
+        volB->setParam(0, -60.0f);
+        volB->prepare(kSampleRate, kBlock);
+
+        auto mix = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Mixer, "mix1");
+        mix->setParam(0, 0.0f); // balance = 0 (only A)
+        mix->prepare(kSampleRate, kBlock);
+
+        wsamp::dsp::Board mixBoard(
+            {volB, mix},
+            {
+                {wsamp::dsp::kInputUid, "mix1", 0},
+                {wsamp::dsp::kInputUid, "vol_b", 0},
+                {"vol_b", "mix1", 1},
+                {"mix1", wsamp::dsp::kOutputUid, 0},
+            });
+        CHECK(mixBoard.valid());
+        mixBoard.prepareScratch(kBlock);
+
+        std::array<float, kBlock> buf{};
+        for (int off = 0; off < 9600; off += kBlock) { // 0.2 s settle
+            buf = in;
+            mixBoard.process(buf.data(), kBlock);
+        }
+        for (int i = 0; i < kBlock; ++i) {
+            CHECK(std::abs(buf[i] - in[i]) < 1e-4f);
+        }
+
+        mix->setParam(0, 1.0f); // balance = 1 (only B)
+        for (int off = 0; off < 9600; off += kBlock) { // 0.2 s settle
+            buf = in;
+            mixBoard.process(buf.data(), kBlock);
+        }
+        for (int i = 0; i < kBlock; ++i) {
+            CHECK(std::abs(buf[i] - 0.001f * in[i]) < 1e-4f);  // the smoothed balance is within 1e-4 of 1 after 0.2 s
+        }
+    }
+
+    // (d) cycle b1->b2->b1 is dropped (valid() false) and processing stays finite
+    {
+        auto b1 = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "b1");
+        auto b2 = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "b2");
+        b1->prepare(kSampleRate, kBlock);
+        b2->prepare(kSampleRate, kBlock);
+
+        wsamp::dsp::Board cyclic(
+            {b1, b2},
+            {
+                {wsamp::dsp::kInputUid, "b1", 0},
+                {"b1", "b2", 0},
+                {"b2", "b1", 0},
+                {"b2", wsamp::dsp::kOutputUid, 0},
+            });
+        CHECK(!cyclic.valid());
+        cyclic.prepareScratch(kBlock);
+
+        auto buf = in;
+        cyclic.process(buf.data(), kBlock);
+        for (float s : buf) {
+            CHECK(std::isfinite(s));
+        }
+    }
+
+    // (e) wouldCreateCycle cases: self-loop, simple back edge, no cycle across diamond
+    {
+        CHECK(wsamp::dsp::wouldCreateCycle({}, {"b1", "b1", 0}));
+        CHECK(wsamp::dsp::wouldCreateCycle({{"b1", "b2", 0}}, {"b2", "b1", 0}));
+
+        const std::vector<wsamp::dsp::Cable> diamond = {
+            {wsamp::dsp::kInputUid, "b1", 0},
+            {wsamp::dsp::kInputUid, "b2", 0},
+            {"b1", "b3", 0},
+            {"b3", wsamp::dsp::kOutputUid, 0},
+        };
+        CHECK(!wsamp::dsp::wouldCreateCycle(diamond, {"b2", "b3", 0}));
+        CHECK(!wsamp::dsp::wouldCreateCycle(diamond, {"b2", wsamp::dsp::kOutputUid, 0}));
+    }
+
+    // (f) unreachable blocks are not processed
+    {
+        auto liveVol = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "live_v");
+        liveVol->setParam(0, 0.0f);
+        liveVol->prepare(kSampleRate, kBlock);
+
+        auto dead1 = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "dead1");
+        dead1->setParam(0, 12.0f);
+        dead1->prepare(kSampleRate, kBlock);
+
+        auto dead2 = wsamp::dsp::makeBlock(wsamp::dsp::BlockType::Volume, "dead2");
+        dead2->setParam(0, 12.0f);
+        dead2->prepare(kSampleRate, kBlock);
+
+        wsamp::dsp::Board board(
+            {liveVol, dead1, dead2},
+            {
+                {wsamp::dsp::kInputUid, "live_v", 0},
+                {"live_v", wsamp::dsp::kOutputUid, 0},
+                {wsamp::dsp::kInputUid, "dead1", 0},
+                {"dead2", "live_v", 0},
+            });
+        CHECK(board.valid());
+        board.prepareScratch(kBlock);
+
+        auto buf = in;
+        board.process(buf.data(), kBlock);
+        for (int i = 0; i < kBlock; ++i) {
+            CHECK(std::abs(buf[i] - in[i]) < 1e-6f);
+        }
+    }
+}
+
 int main() {
     testBiquadMagnitude();
     testOversamplerAndAliasing();
@@ -559,6 +760,7 @@ int main() {
     testRealtimeBudget();
     testSpscAndPresetsAndWav();
     testPedalboardCatalogAndBlocks();
+    testSignalGraph();
 
     if (gFailures == 0) {
         std::printf("All DSP tests passed.\n");
