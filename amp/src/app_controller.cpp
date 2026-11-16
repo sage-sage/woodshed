@@ -39,56 +39,93 @@ std::string wideToUtf8(std::wstring_view wide) {
     return out;
 }
 
-std::string characterToStr(dsp::AmpCharacter c) {
-    switch (c) {
-        case dsp::AmpCharacter::Clean: return "Clean";
-        case dsp::AmpCharacter::Breakup: return "Breakup";
-        case dsp::AmpCharacter::Crunch: return "Crunch";
-        case dsp::AmpCharacter::HighGain: return "HighGain";
-        case dsp::AmpCharacter::Fuzz: return "Fuzz";
+std::string characterIndexToStr(int idx) {
+    switch (idx) {
+        case 0: return "Clean";
+        case 1: return "Breakup";
+        case 2: return "Crunch";
+        case 3: return "HighGain";
+        case 4: return "Fuzz";
+        default: return "Clean";
     }
-    return "Clean";
 }
 
-dsp::AmpCharacter parseCharacter(const json& v, dsp::AmpCharacter fallback) {
+int parseCharacterIndex(const json& v, int fallback) {
     if (v.is_string()) {
         const std::string s = v.get<std::string>();
-        if (s == "Clean" || s == "clean") return dsp::AmpCharacter::Clean;
-        if (s == "Breakup" || s == "breakup") return dsp::AmpCharacter::Breakup;
-        if (s == "Crunch" || s == "crunch") return dsp::AmpCharacter::Crunch;
-        if (s == "HighGain" || s == "high_gain" || s == "highgain") return dsp::AmpCharacter::HighGain;
-        if (s == "Fuzz" || s == "fuzz") return dsp::AmpCharacter::Fuzz;
+        if (s == "Clean" || s == "clean") return 0;
+        if (s == "Breakup" || s == "breakup") return 1;
+        if (s == "Crunch" || s == "crunch") return 2;
+        if (s == "HighGain" || s == "high_gain" || s == "highgain") return 3;
+        if (s == "Fuzz" || s == "fuzz") return 4;
     } else if (v.is_number_integer()) {
-        const int idx = std::clamp(v.get<int>(), 0, 4);
-        return static_cast<dsp::AmpCharacter>(idx);
+        return std::clamp(v.get<int>(), 0, 4);
+    } else if (v.is_number()) {
+        const double d = v.get<double>();
+        if (std::isfinite(d)) {
+            return std::clamp(static_cast<int>(std::lround(d)), 0, 4);
+        }
     }
     return fallback;
 }
 
-std::string cabToStr(dsp::CabType c) {
-    switch (c) {
-        case dsp::CabType::C412: return "C412";
-        case dsp::CabType::O212: return "O212";
-        case dsp::CabType::O112: return "O112";
-        case dsp::CabType::Acoustic: return "Acoustic";
-        case dsp::CabType::Bass: return "Bass";
+std::string cabIndexToStr(int idx) {
+    switch (idx) {
+        case 0: return "C412";
+        case 1: return "O212";
+        case 2: return "O112";
+        case 3: return "Acoustic";
+        case 4: return "Bass";
+        default: return "C412";
     }
-    return "C412";
 }
 
-dsp::CabType parseCab(const json& v, dsp::CabType fallback) {
-    if (v.is_string()) {
-        const std::string s = v.get<std::string>();
-        if (s == "C412" || s == "c412") return dsp::CabType::C412;
-        if (s == "O212" || s == "o212") return dsp::CabType::O212;
-        if (s == "O112" || s == "o112") return dsp::CabType::O112;
-        if (s == "Acoustic" || s == "acoustic") return dsp::CabType::Acoustic;
-        if (s == "Bass" || s == "bass") return dsp::CabType::Bass;
-    } else if (v.is_number_integer()) {
-        const int idx = std::clamp(v.get<int>(), 0, 4);
-        return static_cast<dsp::CabType>(idx);
+BlockState* findBlockByUid(Preset& preset, const std::string& uid) noexcept {
+    for (auto& b : preset.blocks) {
+        if (b.uid == uid) return &b;
     }
-    return fallback;
+    return nullptr;
+}
+
+const BlockState* findFirstBlockByType(const Preset& preset, const std::string& type) noexcept {
+    for (const auto& b : preset.blocks) {
+        if (b.type == type) return &b;
+    }
+    return nullptr;
+}
+
+BlockState* findFirstBlockByTypeMutable(Preset& preset, const std::string& type) noexcept {
+    for (auto& b : preset.blocks) {
+        if (b.type == type) return &b;
+    }
+    return nullptr;
+}
+
+int findParamIndexByKey(const dsp::BlockTypeSpec& spec, const std::string& key) noexcept {
+    for (size_t i = 0; i < spec.params.size(); ++i) {
+        if (spec.params[i].key && key == spec.params[i].key) {
+            return static_cast<int>(i);
+        }
+    }
+    return -1;
+}
+
+float clampSpecParam(const dsp::ParamSpec& ps, float val) noexcept {
+    if (!ps.options.empty()) {
+        val = std::round(val);
+    }
+    return std::clamp(val, ps.min, ps.max);
+}
+
+BlockState makeDefaultBlockState(const dsp::BlockTypeSpec& spec, const std::string& uid) {
+    BlockState bs;
+    bs.uid = uid;
+    bs.type = spec.id;
+    bs.enabled = true;
+    for (const auto& ps : spec.params) {
+        bs.params[ps.key] = clampSpecParam(ps, ps.def);
+    }
+    return bs;
 }
 
 double round1(double v) noexcept {
@@ -247,8 +284,11 @@ bool AppController::start() {
     const bool audioOk = audioEngine_.restart(settings_.device, settings_.inputChannel, settings_.sampleRate, settings_.bufferFrames);
     audioEngine_.setMonitorOutput(settings_.monitorOutput, settings_.monitorExclusive);
 
+    liveBlocks_.clear();
+    loadedBlockFiles_.clear();
+    blockLoadErrors_.clear();
     if (const Preset* activePreset = presetBank_.findById(currentPresetId_)) {
-        applyPresetToChain(*activePreset, true);
+        buildAndInstallBoard(*activePreset, true);
     }
 
     const AudioStatus initSt = audioEngine_.getStatus();
@@ -282,8 +322,13 @@ void AppController::stop() {
         controllerThread_.join();
     }
 
+    if (presetsDirty_) {
+        savePresetsNow();
+    }
+
     wsServer_.stop();
     audioEngine_.shutdown();
+    audioEngine_.chain().reclaim();
 
     std::lock_guard<std::mutex> lock(dialogThreadsMutex_);
     for (auto& t : dialogThreads_) {
@@ -375,30 +420,116 @@ void AppController::onClientTextMessage(uint32_t clientId, std::string_view text
     cmdCv_.notify_one();
 }
 
-void AppController::applyPresetToChain(const Preset& preset, bool loadFiles) {
-    auto& chain = audioEngine_.chain();
-    chain.setParams(preset.params);
-    chain.snapParameters();
+void AppController::markPresetsDirty() {
+    presetsDirty_ = true;
+    lastPresetDirtyTime_ = std::chrono::steady_clock::now();
+}
 
-    if (loadFiles) {
-        if (!preset.namPath.empty()) {
-            chain.loadNamAsync(utf8ToWide(preset.namPath));
+void AppController::savePresetsNow() {
+    std::string saveErr;
+    presetBank_.saveOverridesAtomic(PresetBank::defaultPresetsPath(), saveErr);
+    presetsDirty_ = false;
+}
+
+void AppController::buildAndInstallBoard(const Preset& preset, bool reloadFiles, uint32_t targetClientId) {
+    auto& chain = audioEngine_.chain();
+
+    dsp::GlobalParams gp;
+    gp.inputTrimDb = preset.inputTrimDb;
+    gp.gateThresholdDb = preset.gateThresholdDb;
+    gp.outputLevelDb = preset.outputLevelDb;
+    chain.setGlobal(gp);
+
+    std::unordered_map<std::string, std::shared_ptr<dsp::Block>> nextLive;
+    nextLive.reserve(preset.blocks.size());
+
+    std::vector<std::shared_ptr<dsp::Block>> boardBlocks;
+    boardBlocks.reserve(preset.blocks.size());
+
+    for (const auto& bs : preset.blocks) {
+        const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(bs.type);
+        if (!spec) continue;
+
+        bool isNew = false;
+        std::shared_ptr<dsp::Block> blk;
+        if (auto it = liveBlocks_.find(bs.uid); it != liveBlocks_.end() && it->second && it->second->type() == spec->type) {
+            blk = it->second;
         } else {
-            chain.clearNam();
+            blk = dsp::makeBlock(spec->type, bs.uid);
+            isNew = true;
+        }
+        if (!blk) continue;
+
+        for (size_t i = 0; i < spec->params.size(); ++i) {
+            const auto& ps = spec->params[i];
+            float val = ps.def;
+            if (auto pit = bs.params.find(ps.key); pit != bs.params.end()) {
+                val = pit->second;
+            }
+            blk->setParam(static_cast<int>(i), clampSpecParam(ps, val));
+        }
+        blk->setEnabled(bs.enabled);
+
+        if (spec->usesFile) {
+            if (bs.file.empty()) {
+                if (blk->hasFile() || !loadedBlockFiles_[bs.uid].empty()) {
+                    blk->clearFile();
+                }
+                loadedBlockFiles_[bs.uid].clear();
+                blockLoadErrors_.erase(bs.uid);
+            } else {
+                const bool fileChanged = (loadedBlockFiles_[bs.uid] != bs.file);
+                if (isNew || fileChanged || reloadFiles) {
+                    loadedBlockFiles_[bs.uid] = bs.file;
+                    std::string loadErr;
+                    const std::filesystem::path fsPath(utf8ToWide(bs.file));
+                    if (!blk->loadFile(fsPath, loadErr)) {
+                        blockLoadErrors_[bs.uid] = loadErr;
+                        const std::string fileName = wideToUtf8(fsPath.filename().wstring());
+                        const std::string errJson = buildErrorJson("Could not load " + fileName + ": " + loadErr);
+                        if (targetClientId != 0) {
+                            wsServer_.sendTextToClient(targetClientId, errJson);
+                        } else {
+                            wsServer_.broadcastText(errJson);
+                        }
+                    } else {
+                        blockLoadErrors_.erase(bs.uid);
+                    }
+                }
+            }
         }
 
-        if (!preset.irPath.empty()) {
-            std::string irErr;
-            chain.loadIrFromWav(utf8ToWide(preset.irPath), irErr);
+        nextLive[bs.uid] = blk;
+        boardBlocks.push_back(std::move(blk));
+    }
+
+    for (auto it = loadedBlockFiles_.begin(); it != loadedBlockFiles_.end();) {
+        if (nextLive.find(it->first) == nextLive.end()) {
+            it = loadedBlockFiles_.erase(it);
         } else {
-            chain.clearIr();
+            ++it;
         }
     }
+    for (auto it = blockLoadErrors_.begin(); it != blockLoadErrors_.end();) {
+        if (nextLive.find(it->first) == nextLive.end()) {
+            it = blockLoadErrors_.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    liveBlocks_ = std::move(nextLive);
+
+    auto board = std::make_shared<dsp::Board>(std::move(boardBlocks));
+    if (chain.maxBlock() > 0) {
+        board->prepareScratch(chain.maxBlock());
+    }
+    chain.installBoard(std::move(board));
 }
 
 void AppController::launchBrowseDialogAsync(uint32_t clientId,
                                             const std::string& presetId,
-                                            const std::string& kind) {
+                                            const std::string& kind,
+                                            const std::string& uid) {
     if (browseDialogOpen_.exchange(true, std::memory_order_acq_rel)) {
         wsServer_.sendTextToClient(clientId, buildErrorJson("A file dialog is already open"));
         return;
@@ -413,7 +544,7 @@ void AppController::launchBrowseDialogAsync(uint32_t clientId,
     }
 
     HWND owner = static_cast<HWND>(mainHwnd_.load(std::memory_order_relaxed));
-    dialogThreads_.emplace_back([this, clientId, presetId, kind, owner]() {
+    dialogThreads_.emplace_back([this, clientId, presetId, kind, uid, owner]() {
         wchar_t fileBuf[MAX_PATH * 4]{};
         OPENFILENAMEW ofn{};
         ofn.lStructSize = sizeof(ofn);
@@ -442,6 +573,7 @@ void AppController::launchBrowseDialogAsync(uint32_t clientId,
                 cmd.clientId = clientId;
                 cmd.presetId = presetId;
                 cmd.kind = kind;
+                cmd.uid = uid;
                 cmd.text = std::move(utf8Path);
                 cmdQueue_.push_back(std::move(cmd));
             }
@@ -460,7 +592,12 @@ void AppController::controllerLoop() {
         std::deque<Command> localCmds;
         {
             std::unique_lock<std::mutex> lock(cmdMutex_);
-            cmdCv_.wait_until(lock, nextAudioTick, [this]() {
+            const auto maxWait = clock::now() + std::chrono::milliseconds(200);
+            auto wakeAt = std::min(nextAudioTick, maxWait);
+            if (presetsDirty_) {
+                wakeAt = std::min(wakeAt, lastPresetDirtyTime_ + std::chrono::milliseconds(400));
+            }
+            cmdCv_.wait_until(lock, wakeAt, [this]() {
                 return !running_.load(std::memory_order_acquire) || !cmdQueue_.empty();
             });
             if (!running_.load(std::memory_order_acquire)) break;
@@ -472,7 +609,13 @@ void AppController::controllerLoop() {
             localCmds.pop_front();
         }
 
+        audioEngine_.chain().reclaim();
+
         const auto now = clock::now();
+
+        if (presetsDirty_ && (now - lastPresetDirtyTime_ >= std::chrono::milliseconds(400))) {
+            savePresetsNow();
+        }
 
         // 1. Every 5 ms: drain SPSC ring and send WSA1 binary audio frames to streaming clients
         if (now >= nextAudioTick) {
@@ -516,7 +659,7 @@ void AppController::controllerLoop() {
                         saveSettingsAtomic();
                     }
                     if (const Preset* p = presetBank_.findById(currentPresetId_)) {
-                        applyPresetToChain(*p, true);
+                        buildAndInstallBoard(*p, true);
                     }
                 } else if (!st.lastError.empty() && st.lastError != lastNotifiedError_) {
                     lastNotifiedError_ = st.lastError;
@@ -541,7 +684,10 @@ void AppController::handleCommand(const Command& cmd) {
             if (!p) break;
             currentPresetId_ = p->id;
             settings_.lastPreset = p->id;
-            applyPresetToChain(*p, true);
+            liveBlocks_.clear();
+            loadedBlockFiles_.clear();
+            blockLoadErrors_.clear();
+            buildAndInstallBoard(*p, true);
             saveSettingsAtomic();
             const AudioStatus st = audioEngine_.getStatus();
             refreshTraySnapshot(st);
@@ -594,29 +740,24 @@ void AppController::handleCommand(const Command& cmd) {
             Preset* p = presetBank_.findByIdMutable(cmd.presetId);
             if (!p) break;
 
-            const std::wstring wPath = utf8ToWide(cmd.text);
-            std::string loadErr;
+            BlockState* bs = !cmd.uid.empty() ? findBlockByUid(*p, cmd.uid) : nullptr;
+            if (!bs && !cmd.kind.empty()) {
+                for (auto& b : p->blocks) {
+                    const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(b.type);
+                    if (spec && spec->usesFile && spec->fileKind && cmd.kind == spec->fileKind) {
+                        bs = &b;
+                        break;
+                    }
+                }
+            }
+            if (!bs) break;
 
-            if (cmd.kind == "nam") {
-                if (p->id == currentPresetId_) {
-                    if (!audioEngine_.chain().loadNamSync(wPath, loadErr)) {
-                        wsServer_.sendTextToClient(cmd.clientId, buildErrorJson(loadErr));
-                        break;
-                    }
-                }
-                p->namPath = cmd.text;
-            } else if (cmd.kind == "ir") {
-                if (p->id == currentPresetId_) {
-                    if (!audioEngine_.chain().loadIrFromWav(wPath, loadErr)) {
-                        wsServer_.sendTextToClient(cmd.clientId, buildErrorJson(loadErr));
-                        break;
-                    }
-                }
-                p->irPath = cmd.text;
+            bs->file = cmd.text;
+            if (p->id == currentPresetId_) {
+                buildAndInstallBoard(*p, false, cmd.clientId);
             }
 
-            std::string saveErr;
-            presetBank_.saveOverridesAtomic(PresetBank::defaultPresetsPath(), saveErr);
+            savePresetsNow();
             wsServer_.broadcastText(buildPresetsJson());
             break;
         }
@@ -660,12 +801,274 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
         }
         currentPresetId_ = p->id;
         settings_.lastPreset = p->id;
-        applyPresetToChain(*p, true);
+        liveBlocks_.clear();
+        loadedBlockFiles_.clear();
+        blockLoadErrors_.clear();
+        buildAndInstallBoard(*p, true, clientId);
         saveSettingsAtomic();
         const AudioStatus st = audioEngine_.getStatus();
         refreshTraySnapshot(st);
         wsServer_.broadcastText(buildPresetsJson());
         wsServer_.broadcastText(buildStatusJson(st));
+        return;
+    }
+
+    if (type == "blockParam") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("uid") || !msg["uid"].is_string() ||
+            !msg.contains("key") || !msg["key"].is_string() ||
+            !msg.contains("value") || !msg["value"].is_number()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockParam message"));
+            return;
+        }
+        const double rawVal = msg["value"].get<double>();
+        if (!std::isfinite(rawVal)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockParam value"));
+            return;
+        }
+        const std::string id = msg["id"].get<std::string>();
+        const std::string uid = msg["uid"].get<std::string>();
+        const std::string key = msg["key"].get<std::string>();
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+        BlockState* bs = findBlockByUid(*p, uid);
+        if (!bs) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+            return;
+        }
+        const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(bs->type);
+        if (!spec) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block type: " + bs->type));
+            return;
+        }
+        const int paramIdx = findParamIndexByKey(*spec, key);
+        if (paramIdx < 0) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown parameter key: " + key));
+            return;
+        }
+
+        const float clamped = clampSpecParam(spec->params[static_cast<size_t>(paramIdx)], static_cast<float>(rawVal));
+        bs->params[key] = clamped;
+
+        if (id == currentPresetId_) {
+            if (auto it = liveBlocks_.find(uid); it != liveBlocks_.end() && it->second) {
+                it->second->setParam(paramIdx, clamped);
+            }
+        }
+
+        markPresetsDirty();
+        return;
+    }
+
+    if (type == "blockEnable") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("uid") || !msg["uid"].is_string() ||
+            !msg.contains("on") || !msg["on"].is_boolean()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockEnable message"));
+            return;
+        }
+        const std::string id = msg["id"].get<std::string>();
+        const std::string uid = msg["uid"].get<std::string>();
+        const bool on = msg["on"].get<bool>();
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+        BlockState* bs = findBlockByUid(*p, uid);
+        if (!bs) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+            return;
+        }
+
+        bs->enabled = on;
+        if (id == currentPresetId_) {
+            if (auto it = liveBlocks_.find(uid); it != liveBlocks_.end() && it->second) {
+                it->second->setEnabled(on);
+            }
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "blockAdd") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("blockType") || !msg["blockType"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockAdd message"));
+            return;
+        }
+        if (msg.contains("index") && !msg["index"].is_null() && !msg["index"].is_number_integer()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockAdd index"));
+            return;
+        }
+
+        const std::string id = msg["id"].get<std::string>();
+        const std::string blockType = msg["blockType"].get<std::string>();
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        std::string addErr;
+        if (!PresetBank::canAddBlock(*p, blockType, addErr)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson(addErr));
+            return;
+        }
+
+        const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(blockType);
+        if (!spec) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block type: " + blockType));
+            return;
+        }
+
+        const std::string newUid = "b" + std::to_string(p->nextUid++);
+        BlockState newBlock = makeDefaultBlockState(*spec, newUid);
+
+        int insertIdx = static_cast<int>(p->blocks.size());
+        if (msg.contains("index") && msg["index"].is_number_integer()) {
+            insertIdx = std::clamp(msg["index"].get<int>(), 0, static_cast<int>(p->blocks.size()));
+        }
+        p->blocks.insert(p->blocks.begin() + insertIdx, std::move(newBlock));
+
+        if (id == currentPresetId_) {
+            buildAndInstallBoard(*p, false, clientId);
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+
+        if (spec->usesFile && spec->fileKind) {
+            launchBrowseDialogAsync(clientId, id, spec->fileKind, newUid);
+        }
+        return;
+    }
+
+    if (type == "blockRemove") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("uid") || !msg["uid"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockRemove message"));
+            return;
+        }
+        const std::string id = msg["id"].get<std::string>();
+        const std::string uid = msg["uid"].get<std::string>();
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        auto it = std::find_if(p->blocks.begin(), p->blocks.end(),
+                               [&](const BlockState& b) { return b.uid == uid; });
+        if (it == p->blocks.end()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+            return;
+        }
+
+        p->blocks.erase(it);
+        if (id == currentPresetId_) {
+            buildAndInstallBoard(*p, false, clientId);
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "blockMove") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("uid") || !msg["uid"].is_string() ||
+            !msg.contains("index") || !msg["index"].is_number_integer()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid blockMove message"));
+            return;
+        }
+        const std::string id = msg["id"].get<std::string>();
+        const std::string uid = msg["uid"].get<std::string>();
+        const int requestedIdx = msg["index"].get<int>();
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        int fromIdx = -1;
+        for (int i = 0; i < static_cast<int>(p->blocks.size()); ++i) {
+            if (p->blocks[static_cast<size_t>(i)].uid == uid) {
+                fromIdx = i;
+                break;
+            }
+        }
+        if (fromIdx < 0) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+            return;
+        }
+
+        const int toIdx = std::clamp(requestedIdx, 0, static_cast<int>(p->blocks.size()) - 1);
+        if (fromIdx != toIdx) {
+            BlockState moved = std::move(p->blocks[static_cast<size_t>(fromIdx)]);
+            p->blocks.erase(p->blocks.begin() + fromIdx);
+            p->blocks.insert(p->blocks.begin() + toIdx, std::move(moved));
+        }
+
+        if (id == currentPresetId_) {
+            buildAndInstallBoard(*p, false, clientId);
+        }
+
+        savePresetsNow();
+        wsServer_.broadcastText(buildPresetsJson());
+        return;
+    }
+
+    if (type == "boardGlobal") {
+        if (!msg.contains("id") || !msg["id"].is_string() ||
+            !msg.contains("key") || !msg["key"].is_string() ||
+            !msg.contains("value") || !msg["value"].is_number()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid boardGlobal message"));
+            return;
+        }
+        const double rawVal = msg["value"].get<double>();
+        if (!std::isfinite(rawVal)) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid boardGlobal value"));
+            return;
+        }
+        const std::string id = msg["id"].get<std::string>();
+        const std::string key = msg["key"].get<std::string>();
+
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        const bool isActive = (id == currentPresetId_);
+        auto& chain = audioEngine_.chain();
+        const float val = static_cast<float>(rawVal);
+
+        if (key == "inputTrimDb") {
+            p->inputTrimDb = std::clamp(val, -24.0f, 24.0f);
+            if (isActive) chain.setInputTrimDb(p->inputTrimDb);
+        } else if (key == "gateThresholdDb") {
+            p->gateThresholdDb = std::clamp(val, -80.0f, 0.0f);
+            if (isActive) chain.setGateThresholdDb(p->gateThresholdDb);
+        } else if (key == "outputLevelDb") {
+            p->outputLevelDb = std::clamp(val, -60.0f, 24.0f);
+            if (isActive) chain.setOutputLevelDb(p->outputLevelDb);
+        } else {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown board global parameter: " + key));
+            return;
+        }
+
+        markPresetsDirty();
         return;
     }
 
@@ -686,87 +1089,80 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
             return;
         }
 
-        auto& cp = p->params;
         auto& chain = audioEngine_.chain();
         const bool isActive = (id == currentPresetId_);
 
-        if (key == "gain" && val.is_number()) {
-            cp.amp.gain = std::clamp(val.get<float>(), 0.0f, 10.0f);
-            if (isActive) chain.setAmpGain(cp.amp.gain);
-        } else if (key == "bass" && val.is_number()) {
-            cp.amp.bass = std::clamp(val.get<float>(), 0.0f, 10.0f);
-            if (isActive) chain.setAmpBass(cp.amp.bass);
-        } else if (key == "mid" && val.is_number()) {
-            cp.amp.mid = std::clamp(val.get<float>(), 0.0f, 10.0f);
-            if (isActive) chain.setAmpMid(cp.amp.mid);
-        } else if (key == "treble" && val.is_number()) {
-            cp.amp.treble = std::clamp(val.get<float>(), 0.0f, 10.0f);
-            if (isActive) chain.setAmpTreble(cp.amp.treble);
-        } else if (key == "presence" && val.is_number()) {
-            cp.amp.presence = std::clamp(val.get<float>(), 0.0f, 10.0f);
-            if (isActive) chain.setAmpPresence(cp.amp.presence);
-        } else if ((key == "tightHz" || key == "tight") && val.is_number()) {
-            cp.amp.tightHz = std::clamp(val.get<float>(), 20.0f, 400.0f);
-            if (isActive) chain.setAmpTightHz(cp.amp.tightHz);
-        } else if (key == "character") {
-            cp.amp.character = parseCharacter(val, cp.amp.character);
-            if (isActive) chain.setAmpCharacter(cp.amp.character);
-        } else if (key == "sag" && val.is_number()) {
-            cp.amp.sag = std::clamp(val.get<float>(), 0.0f, 1.0f);
-            if (isActive) chain.setAmpSag(cp.amp.sag);
-        } else if ((key == "ampLevelDb" || key == "levelDb") && val.is_number()) {
-            cp.amp.levelDb = std::clamp(val.get<float>(), -40.0f, 24.0f);
-            if (isActive) chain.setAmpLevelDb(cp.amp.levelDb);
-        } else if (key == "cab" || key == "cabType") {
-            cp.cabType = parseCab(val, cp.cabType);
-            if (isActive) chain.setCabType(cp.cabType);
-        } else if (key == "namIncludesCab" && val.is_boolean()) {
-            cp.namIncludesCab = val.get<bool>();
-            if (isActive) chain.setNamIncludesCab(cp.namIncludesCab);
-        } else if ((key == "inputTrimDb" || key == "inputTrim") && val.is_number()) {
-            cp.inputTrimDb = std::clamp(val.get<float>(), -24.0f, 24.0f);
-            if (isActive) chain.setInputTrimDb(cp.inputTrimDb);
-        } else if ((key == "gateThresholdDb" || key == "gateThreshold" || key == "gate") && val.is_number()) {
-            cp.gateThresholdDb = std::clamp(val.get<float>(), -80.0f, 0.0f);
-            if (isActive) chain.setGateThresholdDb(cp.gateThresholdDb);
-        } else if (key == "postLowDb" && val.is_number()) {
-            cp.postLowDb = std::clamp(val.get<float>(), -15.0f, 15.0f);
-            if (isActive) chain.setPostLowDb(cp.postLowDb);
-        } else if (key == "postMidDb" && val.is_number()) {
-            cp.postMidDb = std::clamp(val.get<float>(), -15.0f, 15.0f);
-            if (isActive) chain.setPostMidDb(cp.postMidDb);
-        } else if (key == "postHighDb" && val.is_number()) {
-            cp.postHighDb = std::clamp(val.get<float>(), -15.0f, 15.0f);
-            if (isActive) chain.setPostHighDb(cp.postHighDb);
-        } else if ((key == "chorusMix" || key == "chorus") && val.is_number()) {
-            cp.chorusMix = std::clamp(val.get<float>(), 0.0f, 1.0f);
-            if (isActive) chain.setChorusMix(cp.chorusMix);
-        } else if ((key == "delayTimeMs" || key == "delayTime") && val.is_number()) {
-            cp.delayTimeMs = std::clamp(val.get<float>(), 0.0f, 1000.0f);
-            if (isActive) chain.setDelayTimeMs(cp.delayTimeMs);
-        } else if (key == "delayFeedback" && val.is_number()) {
-            cp.delayFeedback = std::clamp(val.get<float>(), 0.0f, 0.85f);
-            if (isActive) chain.setDelayFeedback(cp.delayFeedback);
-        } else if ((key == "delayMix" || key == "delay") && val.is_number()) {
-            cp.delayMix = std::clamp(val.get<float>(), 0.0f, 1.0f);
-            if (isActive) chain.setDelayMix(cp.delayMix);
-        } else if (key == "reverbSize" && val.is_number()) {
-            cp.reverbSize = std::clamp(val.get<float>(), 0.0f, 1.0f);
-            if (isActive) chain.setReverbSize(cp.reverbSize);
-        } else if ((key == "reverbMix" || key == "reverb") && val.is_number()) {
-            cp.reverbMix = std::clamp(val.get<float>(), 0.0f, 1.0f);
-            if (isActive) chain.setReverbMix(cp.reverbMix);
-        } else if ((key == "outputLevelDb" || key == "outputLevel") && val.is_number()) {
-            cp.outputLevelDb = std::clamp(val.get<float>(), -60.0f, 24.0f);
-            if (isActive) chain.setOutputLevelDb(cp.outputLevelDb);
+        if (key == "inputTrimDb" && val.is_number() && std::isfinite(val.get<double>())) {
+            p->inputTrimDb = std::clamp(val.get<float>(), -24.0f, 24.0f);
+            if (isActive) chain.setInputTrimDb(p->inputTrimDb);
+            markPresetsDirty();
+            return;
+        }
+        if (key == "gateThresholdDb" && val.is_number() && std::isfinite(val.get<double>())) {
+            p->gateThresholdDb = std::clamp(val.get<float>(), -80.0f, 0.0f);
+            if (isActive) chain.setGateThresholdDb(p->gateThresholdDb);
+            markPresetsDirty();
+            return;
+        }
+        if (key == "outputLevelDb" && val.is_number() && std::isfinite(val.get<double>())) {
+            p->outputLevelDb = std::clamp(val.get<float>(), -60.0f, 24.0f);
+            if (isActive) chain.setOutputLevelDb(p->outputLevelDb);
+            markPresetsDirty();
+            return;
+        }
+
+        std::string mappedKey;
+        if (key == "gain" || key == "bass" || key == "mid" || key == "treble" || key == "presence" || key == "character") {
+            mappedKey = key;
+        } else if (key == "tightHz") {
+            mappedKey = "tight";
+        } else if (key == "ampLevelDb") {
+            mappedKey = "level";
         } else {
             wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown or invalid parameter: " + key));
             return;
         }
 
-        std::string saveErr;
-        presetBank_.saveOverridesAtomic(PresetBank::defaultPresetsPath(), saveErr);
-        wsServer_.broadcastText(buildPresetsJson());
+        BlockState* ampBlock = findFirstBlockByTypeMutable(*p, "amp");
+        const dsp::BlockTypeSpec* ampSpec = dsp::findBlockSpec(dsp::BlockType::Amp);
+        if (!ampBlock || !ampSpec) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown or invalid parameter: " + key));
+            return;
+        }
+
+        const int paramIdx = findParamIndexByKey(*ampSpec, mappedKey);
+        if (paramIdx < 0) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown or invalid parameter: " + key));
+            return;
+        }
+        const auto& ps = ampSpec->params[static_cast<size_t>(paramIdx)];
+
+        float targetVal = 0.0f;
+        if (mappedKey == "character") {
+            const int curIdx = static_cast<int>(std::lround(ampBlock->params[mappedKey]));
+            const int parsedIdx = parseCharacterIndex(val, -1);
+            if (parsedIdx < 0) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown or invalid parameter: " + key));
+                return;
+            }
+            (void)curIdx;
+            targetVal = clampSpecParam(ps, static_cast<float>(parsedIdx));
+        } else {
+            if (!val.is_number() || !std::isfinite(val.get<double>())) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown or invalid parameter: " + key));
+                return;
+            }
+            targetVal = clampSpecParam(ps, val.get<float>());
+        }
+
+        ampBlock->params[mappedKey] = targetVal;
+        if (isActive) {
+            if (auto it = liveBlocks_.find(ampBlock->uid); it != liveBlocks_.end() && it->second) {
+                it->second->setParam(paramIdx, targetVal);
+            }
+        }
+
+        markPresetsDirty();
         return;
     }
 
@@ -787,69 +1183,164 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
             *target = *def;
         }
 
-        std::string saveErr;
-        presetBank_.saveOverridesAtomic(PresetBank::defaultPresetsPath(), saveErr);
+        savePresetsNow();
 
         if (id == currentPresetId_) {
-            applyPresetToChain(*target, true);
+            liveBlocks_.clear();
+            loadedBlockFiles_.clear();
+            blockLoadErrors_.clear();
+            buildAndInstallBoard(*target, true, clientId);
         }
         wsServer_.broadcastText(buildPresetsJson());
         return;
     }
 
     if (type == "browse") {
-        if (!msg.contains("id") || !msg["id"].is_string() ||
-            !msg.contains("kind") || !msg["kind"].is_string()) {
+        if (!msg.contains("id") || !msg["id"].is_string()) {
             wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid browse request"));
             return;
         }
         const std::string id = msg["id"].get<std::string>();
-        const std::string kind = msg["kind"].get<std::string>();
-        if (!presetBank_.findById(id)) {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
-            return;
-        }
-        if (kind != "nam" && kind != "ir") {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("Browse kind must be 'nam' or 'ir'"));
-            return;
-        }
-        launchBrowseDialogAsync(clientId, id, kind);
-        return;
-    }
-
-    if (type == "clearFile") {
-        if (!msg.contains("id") || !msg["id"].is_string() ||
-            !msg.contains("kind") || !msg["kind"].is_string()) {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid clearFile request"));
-            return;
-        }
-        const std::string id = msg["id"].get<std::string>();
-        const std::string kind = msg["kind"].get<std::string>();
         Preset* p = presetBank_.findByIdMutable(id);
         if (!p) {
             wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
             return;
         }
 
-        if (kind == "nam") {
-            p->namPath.clear();
-            p->params.namIncludesCab = false;
-            if (id == currentPresetId_) {
-                audioEngine_.chain().clearNam();
-                audioEngine_.chain().setNamIncludesCab(false);
+        if (msg.contains("uid") && msg["uid"].is_string() && !msg["uid"].get<std::string>().empty()) {
+            const std::string uid = msg["uid"].get<std::string>();
+            BlockState* bs = findBlockByUid(*p, uid);
+            if (!bs) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+                return;
             }
-        } else if (kind == "ir") {
-            p->irPath.clear();
-            if (id == currentPresetId_) {
-                audioEngine_.chain().clearIr();
+            const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(bs->type);
+            if (!spec || !spec->usesFile || !spec->fileKind) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Block does not use a file: " + uid));
+                return;
             }
-        } else {
-            wsServer_.sendTextToClient(clientId, buildErrorJson("clearFile kind must be 'nam' or 'ir'"));
+            const std::string resolvedKind = spec->fileKind;
+            if (msg.contains("kind") && msg["kind"].is_string()) {
+                const std::string reqKind = msg["kind"].get<std::string>();
+                if (!reqKind.empty() && reqKind != resolvedKind) {
+                    wsServer_.sendTextToClient(clientId, buildErrorJson("Browse kind mismatch for block: " + uid));
+                    return;
+                }
+            }
+            launchBrowseDialogAsync(clientId, id, resolvedKind, uid);
             return;
         }
 
-        std::string saveErr;
-        presetBank_.saveOverridesAtomic(PresetBank::defaultPresetsPath(), saveErr);
+        if (!msg.contains("kind") || !msg["kind"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid browse request"));
+            return;
+        }
+        const std::string kind = msg["kind"].get<std::string>();
+        if (kind != "nam" && kind != "ir") {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Browse kind must be 'nam' or 'ir'"));
+            return;
+        }
+
+        std::string targetUid;
+        for (const auto& b : p->blocks) {
+            const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(b.type);
+            if (spec && spec->usesFile && spec->fileKind && kind == spec->fileKind) {
+                targetUid = b.uid;
+                break;
+            }
+        }
+
+        if (targetUid.empty()) {
+            std::string addErr;
+            if (!PresetBank::canAddBlock(*p, kind, addErr)) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson(addErr));
+                return;
+            }
+            const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(kind);
+            if (!spec) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block type: " + kind));
+                return;
+            }
+            targetUid = "b" + std::to_string(p->nextUid++);
+            BlockState newBlock = makeDefaultBlockState(*spec, targetUid);
+            if (kind == "nam") {
+                p->blocks.insert(p->blocks.begin(), std::move(newBlock));
+            } else {
+                size_t insertPos = 0;
+                for (size_t i = 0; i < p->blocks.size(); ++i) {
+                    if (p->blocks[i].type == "amp" || p->blocks[i].type == "nam") {
+                        insertPos = i + 1;
+                    }
+                }
+                p->blocks.insert(p->blocks.begin() + static_cast<ptrdiff_t>(insertPos), std::move(newBlock));
+            }
+
+            if (id == currentPresetId_) {
+                buildAndInstallBoard(*p, false, clientId);
+            }
+            savePresetsNow();
+            wsServer_.broadcastText(buildPresetsJson());
+        }
+
+        launchBrowseDialogAsync(clientId, id, kind, targetUid);
+        return;
+    }
+
+    if (type == "clearFile") {
+        if (!msg.contains("id") || !msg["id"].is_string()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid clearFile request"));
+            return;
+        }
+        const std::string id = msg["id"].get<std::string>();
+        Preset* p = presetBank_.findByIdMutable(id);
+        if (!p) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+
+        BlockState* targetBlock = nullptr;
+        if (msg.contains("uid") && msg["uid"].is_string() && !msg["uid"].get<std::string>().empty()) {
+            const std::string uid = msg["uid"].get<std::string>();
+            targetBlock = findBlockByUid(*p, uid);
+            if (!targetBlock) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown block uid: " + uid));
+                return;
+            }
+            const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(targetBlock->type);
+            if (!spec || !spec->usesFile) {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("Block does not use a file: " + uid));
+                return;
+            }
+        } else if (msg.contains("kind") && msg["kind"].is_string()) {
+            const std::string kind = msg["kind"].get<std::string>();
+            if (kind != "nam" && kind != "ir") {
+                wsServer_.sendTextToClient(clientId, buildErrorJson("clearFile kind must be 'nam' or 'ir'"));
+                return;
+            }
+            for (auto& b : p->blocks) {
+                const dsp::BlockTypeSpec* spec = dsp::findBlockSpec(b.type);
+                if (spec && spec->usesFile && spec->fileKind && kind == spec->fileKind) {
+                    targetBlock = &b;
+                    break;
+                }
+            }
+        } else {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Invalid clearFile request"));
+            return;
+        }
+
+        if (targetBlock) {
+            targetBlock->file.clear();
+            loadedBlockFiles_.erase(targetBlock->uid);
+            blockLoadErrors_.erase(targetBlock->uid);
+            if (id == currentPresetId_) {
+                if (auto it = liveBlocks_.find(targetBlock->uid); it != liveBlocks_.end() && it->second) {
+                    it->second->clearFile();
+                }
+            }
+        }
+
+        savePresetsNow();
         wsServer_.broadcastText(buildPresetsJson());
         return;
     }
@@ -918,7 +1409,7 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
             if (ok) {
                 lastNotifiedError_.clear();
                 if (const Preset* p = presetBank_.findById(currentPresetId_)) {
-                    applyPresetToChain(*p, true);
+                    buildAndInstallBoard(*p, true, clientId);
                 }
             }
         }
@@ -978,7 +1469,8 @@ std::string AppController::buildHelloJson() const {
         {"type", "hello"},
         {"app", "woodshed-amp"},
         {"version", kAmpVersion},
-        {"protocol", 1}
+        {"protocol", 1},
+        {"features", json::array({"board"})}
     };
     return j.dump();
 }
@@ -990,50 +1482,117 @@ std::string AppController::buildPresetsJson() const {
         item["id"] = p.id;
         item["name"] = p.name;
 
-        if (!p.namPath.empty()) {
-            item["nam"] = wideToUtf8(std::filesystem::path(utf8ToWide(p.namPath)).filename().wstring());
-        } else {
-            item["nam"] = nullptr;
+        std::string firstNamFile;
+        std::string firstIrFile;
+        for (const auto& b : p.blocks) {
+            if (firstNamFile.empty() && b.type == "nam" && !b.file.empty()) {
+                firstNamFile = wideToUtf8(std::filesystem::path(utf8ToWide(b.file)).filename().wstring());
+            }
+            if (firstIrFile.empty() && b.type == "ir" && !b.file.empty()) {
+                firstIrFile = wideToUtf8(std::filesystem::path(utf8ToWide(b.file)).filename().wstring());
+            }
         }
-        item["namIncludesCab"] = p.params.namIncludesCab;
+        item["nam"] = firstNamFile.empty() ? json(nullptr) : json(firstNamFile);
+        item["ir"] = firstIrFile.empty() ? json(nullptr) : json(firstIrFile);
 
-        if (!p.irPath.empty()) {
-            item["ir"] = wideToUtf8(std::filesystem::path(utf8ToWide(p.irPath)).filename().wstring());
-        } else {
-            item["ir"] = nullptr;
-        }
-
-        item["params"] = {
-            {"character", characterToStr(p.params.amp.character)},
-            {"gain", p.params.amp.gain},
-            {"bass", p.params.amp.bass},
-            {"mid", p.params.amp.mid},
-            {"treble", p.params.amp.treble},
-            {"presence", p.params.amp.presence},
-            {"tightHz", p.params.amp.tightHz},
-            {"sag", p.params.amp.sag},
-            {"ampLevelDb", p.params.amp.levelDb},
-            {"cab", cabToStr(p.params.cabType)},
-            {"inputTrimDb", p.params.inputTrimDb},
-            {"gateThresholdDb", p.params.gateThresholdDb},
-            {"postLowDb", p.params.postLowDb},
-            {"postMidDb", p.params.postMidDb},
-            {"postHighDb", p.params.postHighDb},
-            {"chorusMix", p.params.chorusMix},
-            {"delayTimeMs", p.params.delayTimeMs},
-            {"delayFeedback", p.params.delayFeedback},
-            {"delayMix", p.params.delayMix},
-            {"reverbSize", p.params.reverbSize},
-            {"reverbMix", p.params.reverbMix},
-            {"outputLevelDb", p.params.outputLevelDb}
+        const BlockState* amp = findFirstBlockByType(p, "amp");
+        auto ampParam = [&](const char* key, float fallback) -> float {
+            if (!amp) return fallback;
+            if (auto it = amp->params.find(key); it != amp->params.end()) return it->second;
+            return fallback;
         };
+
+        const BlockState* cab = findFirstBlockByType(p, "cab");
+        int cabIdx = 0;
+        if (cab) {
+            if (auto it = cab->params.find("model"); it != cab->params.end()) {
+                cabIdx = static_cast<int>(std::lround(it->second));
+            }
+        }
+
+        const int charIdx = static_cast<int>(std::lround(ampParam("character", 0.0f)));
+        item["params"] = {
+            {"character", characterIndexToStr(charIdx)},
+            {"gain", ampParam("gain", 5.0f)},
+            {"bass", ampParam("bass", 5.0f)},
+            {"mid", ampParam("mid", 5.0f)},
+            {"treble", ampParam("treble", 5.0f)},
+            {"presence", ampParam("presence", 5.0f)},
+            {"tightHz", ampParam("tight", 80.0f)},
+            {"ampLevelDb", ampParam("level", 0.0f)},
+            {"cab", cabIndexToStr(cabIdx)},
+            {"inputTrimDb", p.inputTrimDb},
+            {"gateThresholdDb", p.gateThresholdDb},
+            {"outputLevelDb", p.outputLevelDb}
+        };
+
+        json boardBlocks = json::array();
+        for (const auto& b : p.blocks) {
+            json bParams = json::object();
+            for (const auto& [k, v] : b.params) {
+                bParams[k] = v;
+            }
+            json fileVal = nullptr;
+            if (!b.file.empty()) {
+                fileVal = wideToUtf8(std::filesystem::path(utf8ToWide(b.file)).filename().wstring());
+            }
+            boardBlocks.push_back({
+                {"uid", b.uid},
+                {"type", b.type},
+                {"enabled", b.enabled},
+                {"params", std::move(bParams)},
+                {"file", std::move(fileVal)}
+            });
+        }
+
+        item["board"] = {
+            {"inputTrimDb", p.inputTrimDb},
+            {"gateThresholdDb", p.gateThresholdDb},
+            {"outputLevelDb", p.outputLevelDb},
+            {"blocks", std::move(boardBlocks)}
+        };
+
         list.push_back(std::move(item));
+    }
+
+    json blockTypes = json::array();
+    for (const auto& bt : dsp::blockCatalog()) {
+        json paramsArr = json::array();
+        for (const auto& ps : bt.params) {
+            json optsArr = json::array();
+            for (const char* opt : ps.options) {
+                if (opt) optsArr.push_back(opt);
+            }
+            paramsArr.push_back({
+                {"key", ps.key ? ps.key : ""},
+                {"label", ps.label ? ps.label : ""},
+                {"min", ps.min},
+                {"max", ps.max},
+                {"def", ps.def},
+                {"step", ps.step},
+                {"unit", ps.unit ? ps.unit : ""},
+                {"options", std::move(optsArr)}
+            });
+        }
+        blockTypes.push_back({
+            {"id", bt.id ? bt.id : ""},
+            {"name", bt.name ? bt.name : ""},
+            {"category", bt.category ? bt.category : ""},
+            {"usesFile", bt.usesFile},
+            {"fileKind", bt.fileKind ? json(bt.fileKind) : json(nullptr)},
+            {"params", std::move(paramsArr)}
+        });
     }
 
     json j = {
         {"type", "presets"},
         {"current", currentPresetId_},
-        {"list", std::move(list)}
+        {"list", std::move(list)},
+        {"blockTypes", std::move(blockTypes)},
+        {"limits", {
+            {"maxBlocks", dsp::kMaxBoardBlocks},
+            {"maxNam", dsp::kMaxNamBlocks}
+        }}
     };
     return j.dump();
 }

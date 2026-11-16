@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T17:07:23-08:00"
+  "updated": "2026-11-15T17:17:33-08:00"
  },
  "setup": {
-  "version": "2.0.5",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.5/Woodshed-Setup.exe",
-  "sha256": "4dfd8ba7940e83815601a3346f81eda519034dadce66a3864a7362ba1fca04ee",
-  "notes": "Woodshed 2.0.5: after an update, Woodshed and Woodshed Amp reopen by themselves"
+  "version": "2.1.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.1.0/Woodshed-Setup.exe",
+  "sha256": "cfa906e899387f4f50b6661796d945fdd4f2206e441ae682f4a1679409adc173",
+  "notes": "Woodshed 2.1.0: pedalboard. Build each amp preset from blocks in any order: NAM captures (up to 3), cabinet IRs, the built-in amp and cab, EQ, overdrive, chorus, flanger, phaser, tremolo, auto-wah, delay and reverb (Room or Lush)"
  },
  "amp": {
-  "version": "2.0.5",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.5/woodshed-amp.exe",
-  "sha256": "7e76cbe0de5fd2f424f4ee9928fba2246b66b34ffd5b1b641fb0743b2307f8ca",
-  "notes": "Woodshed 2.0.5: after an update, Woodshed and Woodshed Amp reopen by themselves"
+  "version": "2.1.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.1.0/woodshed-amp.exe",
+  "sha256": "1932e08a5eb28e397d67f61aea875c5e1ba7d32e3c1053e62451d68255d047c6",
+  "notes": "Woodshed 2.1.0: pedalboard. Build each amp preset from blocks in any order: NAM captures (up to 3), cabinet IRs, the built-in amp and cab, EQ, overdrive, chorus, flanger, phaser, tremolo, auto-wah, delay and reverb (Room or Lush)"
  },
  "extension": {
   "version": "1.2.0",

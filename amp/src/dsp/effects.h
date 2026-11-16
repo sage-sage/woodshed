@@ -65,6 +65,7 @@ public:
     void reset() noexcept;
 
     void setParams(float timeMs, float feedback, float mix) noexcept;
+    void setFeedbackToneHz(float cutoffHz) noexcept;
 
     void process(float* io, int numSamples) noexcept;
 
@@ -73,12 +74,13 @@ private:
     float timeMs_ = 0.0f;
     float feedback_ = 0.0f;
     float mix_ = 0.0f;
+    double feedbackToneHz_ = 4000.0;
 
     OnePole feedbackLp_;
     std::vector<float> buffer_;
     int mask_ = 0;
     int writePos_ = 0;
-    float maxDelaySamples_ = 48000.0f;
+    float maxDelaySamples_ = 72000.0f;
 };
 
 class Freeverb {

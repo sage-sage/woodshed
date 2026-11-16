@@ -18,10 +18,12 @@ B=build
 N=deps/NeuralAmpModelerCore
 P=deps/portaudio
 A=deps/asiosdk
+D=deps/DaisySP/Source
+DL=deps/DaisySP-LGPL/Source
 mkdir -p $B/obj
 
 CXXFLAGS="-std=c++20 -O2 -DNAM_SAMPLE_FLOAT -DNOMINMAX -DWIN32_LEAN_AND_MEAN -DUNICODE -D_UNICODE
-  -Isrc -I$N -I$N/NAM -I$N/Dependencies/eigen -I$N/Dependencies/nlohmann -I$P/include"
+  -Isrc -I$N -I$N/NAM -I$N/Dependencies/eigen -I$N/Dependencies/nlohmann -I$P/include -I$D -I$DL"
 PADEF="-O2 -DPA_USE_ASIO=1 -DPA_USE_WMME=0 -DPA_USE_DS=0 -DPA_USE_WASAPI=1 -DPA_USE_WDMKS=0 -DPA_USE_JACK=0
   -DPA_LITTLE_ENDIAN -DNDEBUG -I$P/include -I$P/src/common -I$P/src/os/win -I$A/common -I$A/host -I$A/host/pc -w"
 
@@ -57,8 +59,17 @@ for f in $N/NAM/*.cpp $N/NAM/wavenet/*.cpp; do
 done
 wait_all
 
+echo "DaisySP"
+for f in $D/Effects/{chorus,flanger,phaser,tremolo,overdrive,autowah}.cpp \
+         $D/Synthesis/oscillator.cpp \
+         $DL/Effects/reverbsc.cpp; do
+  # Own include paths only: DaisySP's "dsp.h" would otherwise resolve to NAM's dsp.h.
+  par compile "$f" $B/obj/daisy_$(basename "$f" .cpp).o clang++ -std=c++20 -O2 -I$D -I$D/Utility -I$DL -w
+done
+wait_all
+
 echo "Woodshed Amp"
-APP_SRC=(src/dsp/builtin_amp.cpp src/dsp/cab.cpp src/dsp/effects.cpp src/dsp/chain.cpp src/nam_slot.cpp src/wav.cpp
+APP_SRC=(src/dsp/builtin_amp.cpp src/dsp/cab.cpp src/dsp/effects.cpp src/dsp/board.cpp src/dsp/chain.cpp src/nam_slot.cpp src/wav.cpp
          src/presets.cpp)
 NET_SRC=(src/sha1_base64.cpp src/ws_server.cpp)
 APPONLY_SRC=(src/audio_engine.cpp src/app_controller.cpp src/updater.cpp src/tray.cpp src/main.cpp)
@@ -68,7 +79,7 @@ for f in "${APP_SRC[@]}" "${NET_SRC[@]}" "${APPONLY_SRC[@]}" tools/render.cpp te
 done
 wait_all
 
-DSP_OBJ=($B/obj/nam_*.o $(for f in "${APP_SRC[@]}"; do echo $B/obj/app_$(basename $f .cpp).o; done))
+DSP_OBJ=($B/obj/nam_*.o $B/obj/daisy_*.o $(for f in "${APP_SRC[@]}"; do echo $B/obj/app_$(basename $f .cpp).o; done))
 NET_OBJ=($(for f in "${NET_SRC[@]}"; do if [ -f "$f" ]; then echo $B/obj/app_$(basename $f .cpp).o; fi; done))
 LIBS="-static -lole32 -luuid -lwinmm -lws2_32 -lshell32 -luser32 -lgdi32 -lcomdlg32 -ladvapi32 -lwinhttp -lbcrypt"
 

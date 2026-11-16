@@ -12,4 +12,8 @@ Additional components and runtime notices:
   and uses the Microsoft Edge WebView2 Runtime.
 - Neural Amp Modeler Core — MIT License.
 - PortAudio — MIT License.
+- DaisySP (Electrosmith) — MIT License: chorus, flanger, phaser, tremolo, overdrive
+  and auto-wah effects.
+- DaisySP-LGPL (Electrosmith) — GNU LGPL v2.1: the "Lush" reverb (ReverbSc).
+  https://github.com/electro-smith/DaisySP and https://github.com/electro-smith/DaisySP-LGPL
 

@@ -1219,7 +1219,64 @@ function mountSettings(container) {
 
   // Presets are collapsed by default; remember which ones the player opened across re-renders.
   const openPresets = new Set();
+  let cleanupBoardUi = null;
+
+  const PEDAL_CAT_COLORS = {
+    amp: '#c08752',
+    cab: '#8a6d4f',
+    drive: '#c4583c',
+    modulation: '#5b8fb0',
+    time: '#7d6bb3',
+    eq: '#6f9a5b'
+  };
+
+  const PEDAL_CAT_GROUPS = [
+    ['amp', 'Amp & captures'],
+    ['cab', 'Cabinet'],
+    ['drive', 'Drive'],
+    ['modulation', 'Modulation'],
+    ['time', 'Time'],
+    ['eq', 'EQ']
+  ];
+
+  function formatBoardVal(spec, rawVal) {
+    const v = Number(rawVal);
+    if (!Number.isFinite(v)) return '—';
+    if (spec?.isGate && v <= -80) return 'Off';
+    const unit = String(spec?.unit || '').trim();
+    const key = String(spec?.key || '').toLowerCase();
+    const min = Number(spec?.min);
+    const max = Number(spec?.max);
+    const isZeroToOne = min === 0 && max === 1;
+    const isPctKey = key === 'mix' || key === 'depth' || key === 'feedback' || key === 'wah' || (key === 'level' && max === 1);
+    if ((unit === '%' && min >= 0 && max <= 1) || (isZeroToOne && isPctKey)) {
+      return `${Math.round(v * 100)}%`;
+    }
+    if (unit === '%') return `${Math.round(v)}%`;
+    if (unit.toLowerCase() === 'db') {
+      const rounded = Math.round(v * 10) / 10;
+      const clean = Math.abs(rounded) < 0.05 ? 0 : rounded;
+      return `${clean > 0 ? '+' : ''}${clean.toFixed(1)} dB`;
+    }
+    if (unit.toLowerCase() === 'hz') {
+      return Math.abs(v) < 100 ? `${v.toFixed(2)} Hz` : `${Math.round(v)} Hz`;
+    }
+    if (unit.toLowerCase() === 'ms') {
+      return `${Math.round(v)} ms`;
+    }
+    const step = Number(spec?.step);
+    if (Number.isFinite(step) && step >= 1 && Number.isInteger(v)) {
+      return unit ? `${v} ${unit}` : String(v);
+    }
+    const formatted = Math.abs(v) >= 100 ? String(Math.round(v)) : v.toFixed(1);
+    return unit ? `${formatted} ${unit}` : formatted;
+  }
+
   function renderAmpCard() {
+    if (cleanupBoardUi) {
+      cleanupBoardUi();
+      cleanupBoardUi = null;
+    }
     const chip = container.querySelector('#amp-conn-chip');
     const body = container.querySelector('#amp-card-body');
     if (!chip || !body) return;
@@ -1273,6 +1330,9 @@ function mountSettings(container) {
     } else {
       monitorNote = 'Use this to hear your guitar on laptop speakers or another device. It adds roughly 15–30 ms of delay.';
     }
+    const blockTypes = Array.isArray(amp.presets?.blockTypes) ? amp.presets.blockTypes : null;
+    const blockTypeMap = new Map((blockTypes || []).map((bt) => [bt.id, bt]));
+    const boardLimits = amp.presets?.limits || {};
     const sliderKeys = [
       ['gain', 'Gain'],
       ['bass', 'Bass'],
@@ -1283,6 +1343,160 @@ function mountSettings(container) {
 
     const presetsHtml = presetList.map((p) => {
       const isCurrent = p.id === currentPresetId;
+      const hasBoard = Boolean(blockTypes && p.board && Array.isArray(p.board.blocks));
+
+      if (hasBoard) {
+        const board = p.board;
+        const blocks = board.blocks;
+        const trimVal = Number.isFinite(board.inputTrimDb) ? board.inputTrimDb : 0;
+        const gateVal = Number.isFinite(board.gateThresholdDb) ? board.gateThresholdDb : -80;
+        const outVal = Number.isFinite(board.outputLevelDb) ? board.outputLevelDb : 0;
+        const trimSpec = { key: 'inputTrimDb', unit: 'dB' };
+        const gateSpec = { key: 'gateThresholdDb', unit: 'dB', isGate: true };
+        const outSpec = { key: 'outputLevelDb', unit: 'dB' };
+
+        const pillsHtml = blocks.map((blk, i) => {
+          const bt = blockTypeMap.get(blk.type);
+          const baseName = bt?.name || blk.type;
+          const pillText = blk.file ? blk.file : baseName;
+          const isOff = blk.enabled === false;
+          return `${i > 0 ? '<span class="chain-sep" aria-hidden="true">›</span>' : ''}<span class="chain-pill${isOff ? ' is-off' : ''}${blk.file ? ' is-file' : ''}" title="${escapeHtml(blk.file ? `${baseName}: ${blk.file}` : baseName)}">${escapeHtml(pillText)}</span>`;
+        }).join('');
+
+        const renderGlobalFader = (key, label, spec, val, min, max, step) => `
+          <label class="fader">
+            <span class="fader-val tabular" data-global-val="${escapeHtml(p.id)}:${key}">${escapeHtml(formatBoardVal(spec, val))}</span>
+            <span class="fader-slot">
+              <input type="range" class="fader-input board-global-slider" data-preset-id="${escapeHtml(p.id)}" data-global-key="${key}" data-is-gate="${spec.isGate ? '1' : '0'}" min="${min}" max="${max}" step="${step}" value="${val}" aria-label="${label}" />
+            </span>
+            <span class="fader-label">${label}</span>
+          </label>`;
+
+        const pedalsHtml = blocks.map((blk, idx) => {
+          const bt = blockTypeMap.get(blk.type);
+          const blockName = bt?.name || blk.type;
+          const cat = bt?.category || '';
+          const catColor = PEDAL_CAT_COLORS[cat] || '#8a6d4f';
+          const isEnabled = blk.enabled !== false;
+          const paramSpecs = Array.isArray(bt?.params) ? bt.params : [];
+          const continuousSpecs = paramSpecs.filter((ps) => !(Array.isArray(ps.options) && ps.options.length > 0));
+          const optionSpecs = paramSpecs.filter((ps) => Array.isArray(ps.options) && ps.options.length > 0);
+          const fileKind = bt?.fileKind || (blk.type === 'cab' ? 'ir' : 'nam');
+
+          const fadersPart = continuousSpecs.length > 0 ? `
+            <div class="pedal-faders">
+              ${continuousSpecs.map((ps) => {
+                const min = Number.isFinite(ps.min) ? ps.min : 0;
+                const max = Number.isFinite(ps.max) ? ps.max : 10;
+                const step = Number.isFinite(ps.step) && ps.step > 0 ? ps.step : 0.01;
+                const cur = Number.isFinite(blk.params?.[ps.key]) ? blk.params[ps.key] : (Number.isFinite(ps.def) ? ps.def : min);
+                return `
+                  <label class="fader">
+                    <span class="fader-val tabular" data-block-val="${escapeHtml(p.id)}:${escapeHtml(blk.uid)}:${escapeHtml(ps.key)}">${escapeHtml(formatBoardVal(ps, cur))}</span>
+                    <span class="fader-slot">
+                      <input type="range" class="fader-input pedal-param-slider"
+                        data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-param-key="${escapeHtml(ps.key)}"
+                        data-unit="${escapeHtml(ps.unit || '')}" data-min="${min}" data-max="${max}" data-step="${step}"
+                        min="${min}" max="${max}" step="${step}" value="${cur}" aria-label="${escapeHtml(ps.label || ps.key)}" />
+                    </span>
+                    <span class="fader-label">${escapeHtml(ps.label || ps.key)}</span>
+                  </label>`;
+              }).join('')}
+            </div>` : '';
+
+          const optionsPart = optionSpecs.length > 0 ? `
+            <div class="pedal-opts">
+              ${optionSpecs.map((ps) => {
+                const curIdx = Math.round(Number.isFinite(blk.params?.[ps.key]) ? blk.params[ps.key] : (Number.isFinite(ps.def) ? ps.def : 0));
+                if (ps.options.length <= 3) {
+                  return `
+                    <div class="pedal-param-opt">
+                      <span class="fader-label">${escapeHtml(ps.label || ps.key)}</span>
+                      <div class="pedal-seg" role="group" aria-label="${escapeHtml(ps.label || ps.key)}">
+                        ${ps.options.map((opt, optIdx) => `
+                          <button type="button" class="pedal-seg-btn${curIdx === optIdx ? ' is-active' : ''}"
+                            data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-param-key="${escapeHtml(ps.key)}" data-opt-idx="${optIdx}"
+                            title="${escapeHtml(String(opt))}">${escapeHtml(String(opt))}</button>
+                        `).join('')}
+                      </div>
+                    </div>`;
+                }
+                return `
+                  <div class="pedal-param-opt">
+                    <label class="fader-label">${escapeHtml(ps.label || ps.key)}</label>
+                    <select class="select pedal-select" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-param-key="${escapeHtml(ps.key)}">
+                      ${ps.options.map((opt, optIdx) => `<option value="${optIdx}" ${curIdx === optIdx ? 'selected' : ''}>${escapeHtml(String(opt))}</option>`).join('')}
+                    </select>
+                  </div>`;
+              }).join('')}
+            </div>` : '';
+
+          const filePart = (bt?.usesFile || blk.file) ? `
+            <div class="pedal-file">
+              <span class="pedal-file-name" title="${escapeHtml(blk.file || 'No file')}">${escapeHtml(blk.file || 'No file')}</span>
+              <div class="pedal-file-btns">
+                <button type="button" class="btn btn-sm pedal-browse-btn" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-kind="${escapeHtml(fileKind)}">Load</button>
+                ${blk.file ? `<button type="button" class="btn btn-sm btn-ghost pedal-clear-btn" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-kind="${escapeHtml(fileKind)}">Clear</button>` : ''}
+              </div>
+            </div>` : '';
+
+          return `
+            <div class="board-slot" data-preset-id="${escapeHtml(p.id)}" data-drop-index="${idx}"><span class="drop-indicator"></span></div>
+            <div class="pedal${isEnabled ? '' : ' is-off'}" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-index="${idx}" style="--cat:${catColor};">
+              <div class="pedal-head" draggable="true" title="Drag to reorder">
+                <button type="button" class="stomp${isEnabled ? ' is-on' : ''}" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-enabled="${isEnabled ? '1' : '0'}" title="${isEnabled ? 'Bypass block' : 'Enable block'}" aria-label="Toggle ${escapeHtml(blockName)}" aria-pressed="${isEnabled ? 'true' : 'false'}"></button>
+                <span class="pedal-title" title="${escapeHtml(blockName)}">${escapeHtml(blockName)}</span>
+                <div class="pedal-menu-wrap">
+                  <button type="button" class="btn btn-sm btn-ghost pedal-menu-btn" aria-label="Block actions" aria-expanded="false">⋯</button>
+                  <div class="pedal-menu" hidden>
+                    <button type="button" class="pedal-menu-item" data-action="left" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-index="${idx}" ${idx === 0 ? 'disabled' : ''}>Move left</button>
+                    <button type="button" class="pedal-menu-item" data-action="right" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}" data-index="${idx}" ${idx === blocks.length - 1 ? 'disabled' : ''}>Move right</button>
+                    <button type="button" class="pedal-menu-item is-danger" data-action="remove" data-preset-id="${escapeHtml(p.id)}" data-uid="${escapeHtml(blk.uid)}">Remove</button>
+                  </div>
+                </div>
+              </div>
+              ${filePart}
+              <div class="pedal-body">${fadersPart}${optionsPart}</div>
+            </div>`;
+        }).join('');
+
+        return `
+          <details class="amp-preset${isCurrent ? ' is-active' : ''}" data-id="${escapeHtml(p.id)}" ${openPresets.has(p.id) ? 'open' : ''}>
+            <summary class="amp-preset-head">
+              <span class="amp-preset-chevron" aria-hidden="true"></span>
+              <strong class="amp-preset-name">${escapeHtml(p.name || p.id)}</strong>
+              ${isCurrent ? '<span class="chip chip-accent">Active</span>' : `<button type="button" class="btn btn-sm btn-ghost amp-select-preset" data-id="${escapeHtml(p.id)}">Select</button>`}
+              <span class="amp-preset-summary"><span class="chain-pills">${pillsHtml || '<span class="chain-pill is-off">Empty chain</span>'}</span></span>
+            </summary>
+            <div class="amp-preset-deck is-board">
+              <div class="pedalboard" data-preset-id="${escapeHtml(p.id)}">
+                <div class="board-cap">
+                  <span class="board-cap-title">INPUT</span>
+                  <div class="board-cap-faders">
+                    ${renderGlobalFader('inputTrimDb', 'Trim', trimSpec, trimVal, -24, 24, 0.5)}
+                    ${renderGlobalFader('gateThresholdDb', 'Gate', gateSpec, gateVal, -80, 0, 1)}
+                  </div>
+                </div>
+                ${pedalsHtml}
+                <div class="board-slot" data-preset-id="${escapeHtml(p.id)}" data-drop-index="${blocks.length}"><span class="drop-indicator"></span></div>
+                <div class="board-cap">
+                  <span class="board-cap-title">OUTPUT</span>
+                  <div class="board-cap-faders">
+                    ${renderGlobalFader('outputLevelDb', 'Level', outSpec, outVal, -60, 24, 0.5)}
+                  </div>
+                </div>
+                <div class="board-add">
+                  <button type="button" class="btn btn-sm board-add-btn" data-preset-id="${escapeHtml(p.id)}" ${blockTypes.length === 0 ? 'disabled' : ''}>+ Add effect</button>
+                </div>
+              </div>
+              <div class="board-footer">
+                <button type="button" class="btn btn-sm btn-ghost amp-reset-preset" data-id="${escapeHtml(p.id)}">Reset to default</button>
+              </div>
+            </div>
+          </details>
+        `;
+      }
+
       const params = p.params || {};
       const valOf = (key) => (Number.isFinite(params[key]) ? params[key] : 5);
       const fadersHtml = sliderKeys.map(([key, lbl]) => `
@@ -1507,6 +1721,306 @@ function mountSettings(container) {
         amp.setParam(pid, key, val);
       });
     });
+
+    if (blockTypes) {
+      let activeAddMenu = null;
+
+      const closeAllMenus = () => {
+        body.querySelectorAll('.pedal-menu:not([hidden])').forEach((m) => {
+          m.hidden = true;
+          const btn = m.parentElement?.querySelector('.pedal-menu-btn');
+          if (btn) btn.setAttribute('aria-expanded', 'false');
+        });
+        if (activeAddMenu) {
+          activeAddMenu.remove();
+          activeAddMenu = null;
+        }
+      };
+
+      const onDocClick = (e) => {
+        if (!e.target.closest('.pedal-menu-wrap') && !e.target.closest('.board-add-btn') && !e.target.closest('.board-add-menu')) {
+          closeAllMenus();
+        }
+      };
+      const onDocKey = (e) => {
+        if (e.key === 'Escape') closeAllMenus();
+      };
+      document.addEventListener('click', onDocClick);
+      document.addEventListener('keydown', onDocKey);
+      cleanupBoardUi = () => {
+        closeAllMenus();
+        document.removeEventListener('click', onDocClick);
+        document.removeEventListener('keydown', onDocKey);
+      };
+
+      const bindRafSlider = (slider, onSend) => {
+        let rafId = 0;
+        let pending = null;
+        slider.addEventListener('input', () => {
+          pending = parseFloat(slider.value);
+          if (!rafId) {
+            rafId = requestAnimationFrame(() => {
+              rafId = 0;
+              if (pending !== null) onSend(pending);
+            });
+          }
+        });
+      };
+
+      body.querySelectorAll('.board-global-slider').forEach((slider) => {
+        const pid = slider.dataset.presetId;
+        const key = slider.dataset.globalKey;
+        const spec = { key, unit: 'dB', isGate: slider.dataset.isGate === '1' };
+        const valEl = body.querySelector(`[data-global-val="${CSS.escape(pid)}:${key}"]`);
+        slider.addEventListener('input', () => {
+          if (valEl) valEl.textContent = formatBoardVal(spec, parseFloat(slider.value));
+        });
+        bindRafSlider(slider, (v) => amp.setBoardGlobal(pid, key, v));
+      });
+
+      body.querySelectorAll('.pedal-param-slider').forEach((slider) => {
+        const pid = slider.dataset.presetId;
+        const uid = slider.dataset.uid;
+        const key = slider.dataset.paramKey;
+        const spec = {
+          key,
+          unit: slider.dataset.unit || '',
+          min: parseFloat(slider.dataset.min),
+          max: parseFloat(slider.dataset.max),
+          step: parseFloat(slider.dataset.step)
+        };
+        const valEl = body.querySelector(`[data-block-val="${CSS.escape(pid)}:${CSS.escape(uid)}:${CSS.escape(key)}"]`);
+        slider.addEventListener('input', () => {
+          if (valEl) valEl.textContent = formatBoardVal(spec, parseFloat(slider.value));
+        });
+        bindRafSlider(slider, (v) => amp.setBlockParam(pid, uid, key, v));
+      });
+
+      body.querySelectorAll('.pedal-seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const group = btn.closest('.pedal-seg');
+          group?.querySelectorAll('.pedal-seg-btn').forEach((b) => b.classList.remove('is-active'));
+          btn.classList.add('is-active');
+          amp.setBlockParam(btn.dataset.presetId, btn.dataset.uid, btn.dataset.paramKey, Number(btn.dataset.optIdx));
+        });
+      });
+
+      body.querySelectorAll('.pedal-select').forEach((sel) => {
+        sel.addEventListener('change', () => {
+          amp.setBlockParam(sel.dataset.presetId, sel.dataset.uid, sel.dataset.paramKey, Number(sel.value));
+        });
+      });
+
+      body.querySelectorAll('.stomp').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const nextOn = btn.dataset.enabled !== '1';
+          btn.dataset.enabled = nextOn ? '1' : '0';
+          btn.classList.toggle('is-on', nextOn);
+          btn.setAttribute('aria-pressed', nextOn ? 'true' : 'false');
+          btn.closest('.pedal')?.classList.toggle('is-off', !nextOn);
+          amp.setBlockEnabled(btn.dataset.presetId, btn.dataset.uid, nextOn);
+        });
+      });
+
+      body.querySelectorAll('.pedal-browse-btn').forEach((btn) => {
+        btn.addEventListener('click', () => amp.browse(btn.dataset.presetId, btn.dataset.kind, btn.dataset.uid));
+      });
+
+      body.querySelectorAll('.pedal-clear-btn').forEach((btn) => {
+        btn.addEventListener('click', () => amp.clearFile(btn.dataset.presetId, btn.dataset.kind, btn.dataset.uid));
+      });
+
+      body.querySelectorAll('.pedal-menu-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const menu = btn.parentElement?.querySelector('.pedal-menu');
+          const willOpen = Boolean(menu && menu.hidden);
+          closeAllMenus();
+          if (menu && willOpen) {
+            menu.hidden = false;
+            btn.setAttribute('aria-expanded', 'true');
+          }
+        });
+      });
+
+      body.querySelectorAll('.pedal-menu-item').forEach((item) => {
+        item.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const { action, presetId, uid, index } = item.dataset;
+          const idx = Number(index);
+          closeAllMenus();
+          if (action === 'left' && idx > 0) amp.moveBlock(presetId, uid, idx - 1);
+          else if (action === 'right') amp.moveBlock(presetId, uid, idx + 1);
+          else if (action === 'remove') amp.removeBlock(presetId, uid);
+        });
+      });
+
+      body.querySelectorAll('.board-add-btn').forEach((btn) => {
+        btn.addEventListener('click', (e) => {
+          e.stopPropagation();
+          const pid = btn.dataset.presetId;
+          const wasOpenForSame = activeAddMenu && activeAddMenu.dataset.presetId === pid;
+          closeAllMenus();
+          if (wasOpenForSame) return;
+
+          const presetObj = presetList.find((item) => item.id === pid);
+          const blocks = presetObj?.board?.blocks || [];
+          const maxBlocks = Number.isFinite(boardLimits.maxBlocks) ? boardLimits.maxBlocks : Infinity;
+          const maxNam = Number.isFinite(boardLimits.maxNam) ? boardLimits.maxNam : Infinity;
+          const atMaxBlocks = blocks.length >= maxBlocks;
+          const namCount = blocks.filter((b) => {
+            const t = blockTypeMap.get(b.type);
+            return t?.fileKind === 'nam' || b.type === 'nam';
+          }).length;
+          const atMaxNam = namCount >= maxNam;
+
+          const grouped = new Map();
+          for (const [catId, catLabel] of PEDAL_CAT_GROUPS) grouped.set(catId, { label: catLabel, items: [] });
+          for (const bt of blockTypes) {
+            const catId = bt.category || 'other';
+            if (!grouped.has(catId)) grouped.set(catId, { label: catId.charAt(0).toUpperCase() + catId.slice(1), items: [] });
+            grouped.get(catId).items.push(bt);
+          }
+
+          const menu = document.createElement('div');
+          menu.className = 'board-add-menu';
+          menu.dataset.presetId = pid;
+          menu.innerHTML = Array.from(grouped.values())
+            .filter((g) => g.items.length > 0)
+            .map((g) => `
+              <div class="board-add-group">
+                <div class="board-add-group-title">${escapeHtml(g.label)}</div>
+                ${g.items.map((bt) => {
+                  const isNam = bt.fileKind === 'nam' || bt.id === 'nam';
+                  const reason = atMaxBlocks
+                    ? `Maximum ${maxBlocks} blocks reached`
+                    : (isNam && atMaxNam ? `Maximum ${maxNam} NAM capture${maxNam === 1 ? '' : 's'} reached` : '');
+                  return `<button type="button" class="board-add-item" data-type-id="${escapeHtml(bt.id)}" data-cat="${escapeHtml(bt.category || '')}" ${reason ? `disabled title="${escapeHtml(reason)}"` : ''}>${escapeHtml(bt.name || bt.id)}</button>`;
+                }).join('')}
+              </div>
+            `).join('');
+
+          document.body.appendChild(menu);
+          activeAddMenu = menu;
+
+          const rect = btn.getBoundingClientRect();
+          const menuRect = menu.getBoundingClientRect();
+          const left = Math.max(8, Math.min(rect.right - menuRect.width, window.innerWidth - menuRect.width - 8));
+          const spaceBelow = window.innerHeight - rect.bottom - 8;
+          const top = spaceBelow >= menuRect.height || spaceBelow >= rect.top
+            ? Math.min(rect.bottom + 6, window.innerHeight - menuRect.height - 8)
+            : Math.max(8, rect.top - menuRect.height - 6);
+          menu.style.left = `${left}px`;
+          menu.style.top = `${top}px`;
+
+          menu.querySelectorAll('.board-add-item:not([disabled])').forEach((item) => {
+            item.addEventListener('click', () => {
+              const typeId = item.dataset.typeId;
+              const cat = item.dataset.cat;
+              closeAllMenus();
+              const firstTimeIdx = blocks.findIndex((b) => blockTypeMap.get(b.type)?.category === 'time');
+              if (cat !== 'time' && firstTimeIdx !== -1) {
+                amp.addBlock(pid, typeId, firstTimeIdx);
+              } else {
+                amp.addBlock(pid, typeId);
+              }
+            });
+          });
+        });
+      });
+
+      let dragState = null;
+      const clearDropMarkers = (boardEl) => {
+        boardEl?.querySelectorAll('.board-slot.is-drop-target').forEach((s) => s.classList.remove('is-drop-target'));
+      };
+
+      body.querySelectorAll('.pedalboard').forEach((boardEl) => {
+        const pid = boardEl.dataset.presetId;
+        let currentDropIdx = null;
+
+        const setDropSlot = (dropIdx) => {
+          if (currentDropIdx === dropIdx) return;
+          clearDropMarkers(boardEl);
+          currentDropIdx = dropIdx;
+          if (!dragState || dragState.presetId !== pid || dropIdx == null) return;
+          if (dropIdx === dragState.fromIndex || dropIdx === dragState.fromIndex + 1) return;
+          const slot = boardEl.querySelector(`.board-slot[data-drop-index="${dropIdx}"]`);
+          slot?.classList.add('is-drop-target');
+        };
+
+        boardEl.querySelectorAll('.pedal-head').forEach((head) => {
+          const pedal = head.closest('.pedal');
+          head.addEventListener('dragstart', (e) => {
+            if (e.target.closest('button')) {
+              e.preventDefault();
+              return;
+            }
+            closeAllMenus();
+            dragState = {
+              presetId: pid,
+              uid: pedal.dataset.uid,
+              fromIndex: Number(pedal.dataset.index)
+            };
+            pedal.classList.add('is-dragging');
+            if (e.dataTransfer) {
+              e.dataTransfer.effectAllowed = 'move';
+              e.dataTransfer.setData('text/plain', pedal.dataset.uid);
+            }
+          });
+          head.addEventListener('dragend', () => {
+            pedal.classList.remove('is-dragging');
+            clearDropMarkers(boardEl);
+            dragState = null;
+            currentDropIdx = null;
+          });
+        });
+
+        boardEl.querySelectorAll('.board-slot').forEach((slot) => {
+          slot.addEventListener('dragover', (e) => {
+            if (!dragState || dragState.presetId !== pid) return;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            setDropSlot(Number(slot.dataset.dropIndex));
+          });
+          slot.addEventListener('drop', (e) => {
+            if (!dragState || dragState.presetId !== pid) return;
+            e.preventDefault();
+            const dropIdx = Number(slot.dataset.dropIndex);
+            const { uid, fromIndex } = dragState;
+            clearDropMarkers(boardEl);
+            dragState = null;
+            currentDropIdx = null;
+            const newIndex = dropIdx > fromIndex ? dropIdx - 1 : dropIdx;
+            if (newIndex !== fromIndex) amp.moveBlock(pid, uid, newIndex);
+          });
+        });
+
+        boardEl.querySelectorAll('.pedal').forEach((pedal) => {
+          pedal.addEventListener('dragover', (e) => {
+            if (!dragState || dragState.presetId !== pid) return;
+            e.preventDefault();
+            if (e.dataTransfer) e.dataTransfer.dropEffect = 'move';
+            const rect = pedal.getBoundingClientRect();
+            const idx = Number(pedal.dataset.index);
+            const dropIdx = e.clientX < rect.left + rect.width / 2 ? idx : idx + 1;
+            setDropSlot(dropIdx);
+          });
+          pedal.addEventListener('drop', (e) => {
+            if (!dragState || dragState.presetId !== pid) return;
+            e.preventDefault();
+            const rect = pedal.getBoundingClientRect();
+            const idx = Number(pedal.dataset.index);
+            const dropIdx = e.clientX < rect.left + rect.width / 2 ? idx : idx + 1;
+            const { uid, fromIndex } = dragState;
+            clearDropMarkers(boardEl);
+            dragState = null;
+            currentDropIdx = null;
+            const newIndex = dropIdx > fromIndex ? dropIdx - 1 : dropIdx;
+            if (newIndex !== fromIndex) amp.moveBlock(pid, uid, newIndex);
+          });
+        });
+      });
+    }
   }
 
   renderAmpCard();

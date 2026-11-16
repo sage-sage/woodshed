@@ -1,18 +1,22 @@
 #pragma once
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <deque>
 #include <filesystem>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <vector>
 
 #include "audio_engine.h"
+#include "dsp/board.h"
 #include "presets.h"
 #include "ws_server.h"
 
@@ -92,6 +96,7 @@ private:
         std::string text;
         std::string presetId;
         std::string kind;
+        std::string uid;
         int intVal = 0;
         bool boolVal = false;
     };
@@ -105,8 +110,11 @@ private:
     void handleCommand(const Command& cmd);
     void handleWsJson(uint32_t clientId, const std::string& text);
 
-    void applyPresetToChain(const Preset& preset, bool loadFiles);
-    void launchBrowseDialogAsync(uint32_t clientId, const std::string& presetId, const std::string& kind);
+    void buildAndInstallBoard(const Preset& preset, bool reloadFiles, uint32_t targetClientId = 0);
+    void launchBrowseDialogAsync(uint32_t clientId, const std::string& presetId, const std::string& kind, const std::string& uid);
+
+    void markPresetsDirty();
+    void savePresetsNow();
 
     std::string buildHelloJson() const;
     std::string buildPresetsJson() const;
@@ -121,6 +129,13 @@ private:
     PresetBank presetBank_;
     AppSettings settings_;
     std::string currentPresetId_ = "crunch";
+
+    std::unordered_map<std::string, std::shared_ptr<dsp::Block>> liveBlocks_;
+    std::unordered_map<std::string, std::string> loadedBlockFiles_;
+    std::unordered_map<std::string, std::string> blockLoadErrors_;
+
+    bool presetsDirty_ = false;
+    std::chrono::steady_clock::time_point lastPresetDirtyTime_{};
 
     std::atomic<void*> mainHwnd_{nullptr};
     std::atomic<bool> running_{false};

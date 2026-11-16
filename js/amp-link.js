@@ -461,7 +461,10 @@ export class AmpLink extends EventTarget {
     } else if (msg.type === 'presets') {
       this.presets = {
         current: msg.current ?? null,
-        list: Array.isArray(msg.list) ? msg.list : []
+        list: Array.isArray(msg.list) ? msg.list : [],
+        // Woodshed Amp 2.1+ pedalboard: the effect catalog and the board limits.
+        blockTypes: Array.isArray(msg.blockTypes) ? msg.blockTypes : null,
+        limits: msg.limits || null
       };
       this._emit('presets', this.presets);
     } else if (msg.type === 'devices') {
@@ -591,12 +594,38 @@ export class AmpLink extends EventTarget {
     return this._send({ type: 'resetPreset', id: String(id) });
   }
 
-  browse(id, kind) {
-    return this._send({ type: 'browse', id: String(id), kind: String(kind) });
+  browse(id, kind, uid) {
+    return this._send({ type: 'browse', id: String(id), kind: String(kind), ...(uid != null ? { uid: String(uid) } : {}) });
   }
 
-  clearFile(id, kind) {
-    return this._send({ type: 'clearFile', id: String(id), kind: String(kind) });
+  clearFile(id, kind, uid) {
+    return this._send({ type: 'clearFile', id: String(id), kind: String(kind), ...(uid != null ? { uid: String(uid) } : {}) });
+  }
+
+  setBlockParam(id, uid, key, value) {
+    return this._send({ type: 'blockParam', id: String(id), uid: String(uid), key: String(key), value: Number(value) });
+  }
+
+  setBlockEnabled(id, uid, on) {
+    return this._send({ type: 'blockEnable', id: String(id), uid: String(uid), on: Boolean(on) });
+  }
+
+  addBlock(id, blockType, index) {
+    const msg = { type: 'blockAdd', id: String(id), blockType: String(blockType) };
+    if (Number.isFinite(index)) msg.index = Number(index);
+    return this._send(msg);
+  }
+
+  removeBlock(id, uid) {
+    return this._send({ type: 'blockRemove', id: String(id), uid: String(uid) });
+  }
+
+  moveBlock(id, uid, index) {
+    return this._send({ type: 'blockMove', id: String(id), uid: String(uid), index: Number(index) });
+  }
+
+  setBoardGlobal(id, key, value) {
+    return this._send({ type: 'boardGlobal', id: String(id), key: String(key), value: Number(value) });
   }
 
   setBypass(on) {

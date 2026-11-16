@@ -1,20 +1,30 @@
 #pragma once
 
 #include <filesystem>
-#include <optional>
+#include <map>
 #include <string>
 #include <vector>
 
-#include "dsp/chain.h"
+#include "dsp/board.h"
 
 namespace wsamp {
+
+struct BlockState {
+    std::string uid;
+    std::string type;
+    bool enabled = true;
+    std::map<std::string, float> params;
+    std::string file; // full UTF-8 path, file blocks only
+};
 
 struct Preset {
     std::string id;
     std::string name;
-    dsp::ChainParams params{};
-    std::string namPath;
-    std::string irPath;
+    float inputTrimDb = 0.0f;
+    float gateThresholdDb = -70.0f;
+    float outputLevelDb = 0.0f;
+    std::vector<BlockState> blocks;
+    int nextUid = 1;
 };
 
 class PresetBank {
@@ -24,11 +34,14 @@ public:
     // Returns the default overrides path (%APPDATA%\WoodshedAmp\presets.json on Windows).
     static std::filesystem::path defaultPresetsPath();
 
+    // Validates whether a block of `type` can be added to `preset`.
+    static bool canAddBlock(const Preset& preset, const std::string& type, std::string& errorOut);
+
     // Loads built-in defaults and applies any overrides present in `jsonPath`.
     // Missing file is valid and yields defaults.
     bool loadOverrides(const std::filesystem::path& jsonPath, std::string& errorOut);
 
-    // Atomically saves only per-id overrides relative to built-in defaults (write temp + rename).
+    // Atomically saves full Preset objects for every preset differing from built-in defaults (version 2).
     bool saveOverridesAtomic(const std::filesystem::path& jsonPath, std::string& errorOut) const;
 
     const std::vector<Preset>& presets() const noexcept { return presets_; }

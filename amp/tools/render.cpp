@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <iostream>
+#include <memory>
 #include <string>
 #include <vector>
 
@@ -107,24 +108,32 @@ int main(int argc, char** argv) {
 
     wsamp::dsp::Chain chain;
     chain.prepare(static_cast<double>(targetRate), blockSize);
-    chain.setParams(preset->params);
-    chain.snapParameters();
+    chain.setGlobal({preset->inputTrimDb, preset->gateThresholdDb, preset->outputLevelDb});
 
-    const std::string effectiveNam = !namPath.empty() ? namPath : preset->namPath;
-    if (!effectiveNam.empty()) {
-        if (!chain.loadNamSync(effectiveNam, err)) {
-            std::cerr << "Failed loading NAM model: " << err << "\n";
+    // Build the preset's pedalboard. -nam / -ir override the first amp-or-capture / cab-or-IR block.
+    std::vector<std::shared_ptr<wsamp::dsp::Block>> blocks;
+    bool namUsed = namPath.empty(), irUsed = irPath.empty();
+    for (const auto& bs : preset->blocks) {
+        std::string typeId = bs.type;
+        std::string file = bs.file;
+        if (!namUsed && (typeId == "amp" || typeId == "nam")) { typeId = "nam"; file = namPath; namUsed = true; }
+        if (!irUsed && (typeId == "cab" || typeId == "ir")) { typeId = "ir"; file = irPath; irUsed = true; }
+        const wsamp::dsp::BlockTypeSpec* spec = wsamp::dsp::findBlockSpec(typeId);
+        if (!spec) continue;
+        auto block = wsamp::dsp::makeBlock(spec->type, bs.uid);
+        for (size_t i = 0; i < spec->params.size(); ++i) {
+            auto it = bs.params.find(spec->params[i].key);
+            if (it != bs.params.end()) block->setParam(static_cast<int>(i), it->second);
+        }
+        block->setEnabled(bs.enabled);
+        block->prepare(static_cast<double>(targetRate), blockSize);
+        if (spec->usesFile && !file.empty() && !block->loadFile(file, err)) {
+            std::cerr << "Failed loading " << file << ": " << err << "\n";
             return 1;
         }
+        blocks.push_back(std::move(block));
     }
-
-    const std::string effectiveIr = !irPath.empty() ? irPath : preset->irPath;
-    if (!effectiveIr.empty()) {
-        if (!chain.loadIrFromWav(effectiveIr, err)) {
-            std::cerr << "Failed loading IR WAV: " << err << "\n";
-            return 1;
-        }
-    }
+    chain.installBoard(std::make_shared<wsamp::dsp::Board>(std::move(blocks)));
 
     const size_t totalSamples = audio.size();
     size_t numBlocks = 0;

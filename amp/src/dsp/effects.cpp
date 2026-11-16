@@ -148,14 +148,14 @@ void Chorus::process(float* io, int numSamples) noexcept {
 
 void MonoDelay::prepare(double sampleRate, int maxBlock) {
     sampleRate_ = (sampleRate > 1.0) ? sampleRate : 48000.0;
-    maxDelaySamples_ = static_cast<float>(sampleRate_);
-    const int minSize = static_cast<int>(std::ceil(1.05 * sampleRate_)) + 16;
+    maxDelaySamples_ = 1.5f * static_cast<float>(sampleRate_);
+    const int minSize = static_cast<int>(std::ceil(1.55 * sampleRate_)) + 16;
     const int size = nextPowerOfTwo(std::max(128, minSize));
     buffer_.assign(static_cast<size_t>(size), 0.0f);
     mask_ = size - 1;
 
     feedbackLp_.prepare(sampleRate_, maxBlock);
-    feedbackLp_.setCutoffHz(4000.0);
+    feedbackLp_.setCutoffHz(feedbackToneHz_);
     reset();
 }
 
@@ -166,9 +166,15 @@ void MonoDelay::reset() noexcept {
 }
 
 void MonoDelay::setParams(float timeMs, float feedback, float mix) noexcept {
-    timeMs_ = std::clamp(timeMs, 0.0f, 1000.0f);
-    feedback_ = std::clamp(feedback, 0.0f, 0.85f);
+    timeMs_ = std::clamp(timeMs, 0.0f, 1500.0f);
+    feedback_ = std::clamp(feedback, 0.0f, 0.9f);
     mix_ = std::clamp(mix, 0.0f, 1.0f);
+}
+
+void MonoDelay::setFeedbackToneHz(float cutoffHz) noexcept {
+    const double maxCutoff = std::max(20.0, sampleRate_ * 0.45);
+    feedbackToneHz_ = std::clamp(static_cast<double>(cutoffHz), 20.0, maxCutoff);
+    feedbackLp_.setCutoffHz(feedbackToneHz_);
 }
 
 void MonoDelay::process(float* io, int numSamples) noexcept {
