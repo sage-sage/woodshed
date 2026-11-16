@@ -647,39 +647,45 @@ function mountLibrary(container) {
     const records = await store.listSongs();
     if (!active) return;
 
-    const cardsHtml = records.map((rec) => {
+    // Song tiles: a halftone header strip coloured by where the tab came from, a poster title, and a
+    // Play / Learn / Sync bar (Rodeo Night look).
+    const SOURCE_STYLE = {
+      songsterr: { label: 'Songsterr', cls: 'src-songsterr' },
+      gp: { label: 'Guitar Pro', cls: 'src-gp' },
+      demo: { label: 'Built in', cls: 'src-demo' },
+    };
+    const cardsHtml = records.map((rec, idx) => {
       const s = rec.song;
       const tuningName = getTuningName(s.tuning);
-      const stars = rec.best ? ('★'.repeat(rec.best.stars) + '☆'.repeat(5 - rec.best.stars)) : '☆☆☆☆☆';
-      const accText = rec.best ? `${(rec.best.accuracy * 100).toFixed(0)}% best` : 'Not played yet';
-      const badgeLabel = s.source === 'gp' ? 'Guitar Pro / XML' : s.source === 'demo' ? 'Built-in Demo' : 'ASCII Tab';
+      const src = SOURCE_STYLE[s.source] || { label: 'Text tab', cls: 'src-text' };
+      const details = [
+        `${Math.round(s.bpm)} bpm`,
+        formatDuration(s.duration),
+        rec.best ? `best ${(rec.best.accuracy * 100).toFixed(0)}%` : 'not played yet',
+      ].join(' · ');
       const safeId = escapeHtml(rec.id);
       const safeTitle = escapeHtml(s.title);
 
       return `
-        <article class="card song-card" data-song-id="${safeId}">
-          <div>
+        <article class="song-card ${src.cls}" data-song-id="${safeId}">
+          <div class="song-card-strip">
+            <span class="song-card-source">${escapeHtml(src.label)} · ${escapeHtml(tuningName)}</span>
+            <span class="song-card-tools">
+              <button type="button" class="song-card-tool export-song-btn" data-id="${safeId}" title="Export this song as a file">Export</button>
+              <button type="button" class="song-card-tool delete-song-btn" data-id="${safeId}" data-title="${safeTitle}" title="Delete this song">Delete</button>
+            </span>
+          </div>
+          <div class="song-card-body">
+            <span class="song-card-no">No. ${String(idx + 1).padStart(2, '0')}</span>
             <h2 class="song-card-title" title="${safeTitle}">${safeTitle}</h2>
             <p class="song-card-artist">${escapeHtml(s.artist)}</p>
-            <div class="song-card-badges">
-              <span class="chip chip-accent">${escapeHtml(badgeLabel)}</span>
-              <span class="chip">${escapeHtml(tuningName)}</span>
-              <span class="chip">${Math.round(s.bpm)} BPM</span>
-              <span class="chip">${escapeHtml(formatDuration(s.duration))}</span>
-            </div>
+            <p class="song-card-details">${escapeHtml(details)}</p>
           </div>
-
-          <div class="song-card-footer">
-            <div>
-              <div class="stars-display">${escapeHtml(stars)}</div>
-              <div style="font-size:0.76rem;color:var(--text-muted);">${escapeHtml(accText)}</div>
-            </div>
-            <div style="display:flex;gap:6px;">
-              <button type="button" class="btn btn-sm btn-ghost export-song-btn" data-id="${safeId}" title="Export JSON">Export</button>
-              <button type="button" class="btn btn-sm btn-ghost btn-danger delete-song-btn" data-id="${safeId}" data-title="${safeTitle}">Delete</button>
-              <a href="#/song/${safeId}/play" class="btn btn-sm btn-primary">Play</a>
-            </div>
-          </div>
+          <nav class="song-card-actions" aria-label="${safeTitle}">
+            <a href="#/song/${safeId}/play" class="song-card-act is-play">Play</a>
+            <a href="#/song/${safeId}/learn" class="song-card-act">Learn</a>
+            <a href="#/song/${safeId}/sync" class="song-card-act">Sync</a>
+          </nav>
         </article>
       `;
     }).join('');

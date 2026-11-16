@@ -2,10 +2,10 @@
 
 namespace wsamp {
 
-inline constexpr const char* kAmpVersion = "2.2.0";
-inline constexpr const wchar_t* kAmpVersionW = L"2.2.0";
-inline constexpr const char* kAppVersion = "2.2.0";
-inline constexpr const wchar_t* kAppVersionW = L"2.2.0";
+inline constexpr const char* kAmpVersion = "2.3.0";
+inline constexpr const wchar_t* kAmpVersionW = L"2.3.0";
+inline constexpr const char* kAppVersion = "2.3.0";
+inline constexpr const wchar_t* kAppVersionW = L"2.3.0";
 inline constexpr const char* kGhOwner = "sage-sage";
 
 inline constexpr const char* kPagesOrigin = "https://sage-sage.github.io";

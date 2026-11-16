@@ -15,6 +15,71 @@ const TONE_PRESETS = {
   bass:      { k: 1.5, preHP: 35,  preEQFreq: 600,  preEQGain: -2, cabLP: 2500,  cabPeakFreq: 800,  cabPeakGain: 1, cabLowFreq: 80,  cabLowGain: 4, rev: 0.03 }
 };
 
+// Recorded guitar samples (FluidR3_GM, CC BY 3.0, see vendor/fluidr3) for each tone. `driven` samples are
+// already distorted, so the tone chain's own drive is relaxed when they are in use.
+const SAMPLE_SETS = {
+  clean: 'electric_guitar_clean',
+  jazz: 'electric_guitar_jazz',
+  breakup: 'electric_guitar_clean',
+  crunch: 'overdriven_guitar',
+  rock_lead: 'overdriven_guitar',
+  high_gain: 'distortion_guitar',
+  metal: 'distortion_guitar',
+  fuzz: 'distortion_guitar',
+  acoustic: 'acoustic_guitar_steel',
+  bass: 'electric_bass_finger',
+};
+const DRIVEN_SETS = new Set(['overdriven_guitar', 'distortion_guitar']);
+// The samples are quieter than the plucked-string model; these match their loudness (RMS over the first
+// half second, averaged across the range, measured 2026-11-15) so the guide keeps its old level.
+const SAMPLE_GAIN = { electric_guitar_clean: 2.67, electric_guitar_jazz: 2.69, acoustic_guitar_steel: 3.02,
+  overdriven_guitar: 2.3, distortion_guitar: 1.75, electric_bass_finger: 3.47 };
+
+/** Loads and decodes one FluidR3 instrument (vendor/fluidr3/<name>.json) note by note, in the background. */
+class SampleSet {
+  constructor(ctx, name) {
+    this.ctx = ctx;
+    this.name = name;
+    this.buffers = new Map();   // midi -> AudioBuffer
+    this.failed = false;
+    this.ready = this._load();
+  }
+
+  async _load() {
+    try {
+      const res = await fetch(`vendor/fluidr3/${this.name}.json`);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const entries = Object.entries(data.notes || {}).map(([m, b64]) => [Number(m), b64]);
+      // Middle of the range first: the notes most songs use are ready soonest.
+      entries.sort((a, b) => Math.abs(a[0] - 55) - Math.abs(b[0] - 55));
+      for (const [midi, b64] of entries) {
+        const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+        try {
+          this.buffers.set(midi, await this.ctx.decodeAudioData(bytes.buffer));
+        } catch (_) {
+          // One bad note is not fatal: neighbours are pitch-shifted to cover it.
+        }
+      }
+      if (this.buffers.size === 0) throw new Error('no playable notes');
+    } catch (err) {
+      this.failed = true;
+      console.warn(`[woodshed] guitar samples "${this.name}" unavailable, using the built-in synth:`, err?.message || err);
+    }
+  }
+
+  /** The decoded sample nearest to `midi` and the playback rate that tunes it to `midi`, or null. */
+  pick(midi) {
+    if (this.buffers.has(midi)) return { buffer: this.buffers.get(midi), rate: 1 };
+    let best = null;
+    for (const m of this.buffers.keys()) {
+      if (best === null || Math.abs(m - midi) < Math.abs(best - midi)) best = m;
+    }
+    if (best === null || Math.abs(best - midi) > 7) return null;
+    return { buffer: this.buffers.get(best), rate: Math.pow(2, (midi - best) / 12) };
+  }
+}
+
 export function resolveGuideTone(setting, songToneId) {
   if (!setting || setting === 'match') {
     return songToneId && TONE_PRESETS[songToneId] ? songToneId : 'clean';
@@ -82,6 +147,7 @@ export class GuitarSynth {
 
     this.bufferCache = new Map();
     this.curveCache = new Map();
+    this.sampleSets = new Map();   // FluidR3 instrument name -> SampleSet (loaded on first use)
     this.activeVoices = new Set();
     this.a4 = 440;
     this.toneId = 'clean';
@@ -143,15 +209,23 @@ export class GuitarSynth {
     const cfg = TONE_PRESETS[resolvedId];
     this.toneId = resolvedId;
 
+    // Start loading this tone's recorded samples; until they are decoded the plucked-string model plays.
+    const setName = SAMPLE_SETS[resolvedId];
+    if (setName && !this.sampleSets.has(setName) && typeof fetch === 'function') {
+      this.sampleSets.set(setName, new SampleSet(this.ctx, setName));
+    }
+    // Already-distorted samples only need a touch of the shaper.
+    const k = DRIVEN_SETS.has(setName) ? Math.min(cfg.k, 1.5) : cfg.k;
+
     const now = this.ctx.currentTime;
     const tc = 0.03;
     this.preHP.frequency.setTargetAtTime(cfg.preHP, now, tc);
     this.preEQ.frequency.setTargetAtTime(cfg.preEQFreq, now, tc);
     this.preEQ.gain.setTargetAtTime(cfg.preEQGain, now, tc);
-    this.drive.curve = this._getDriveCurve(resolvedId, cfg.k);
+    this.drive.curve = this._getDriveCurve(resolvedId, k);
     // A driven shaper sits near full scale whatever goes in (a guide note arrives around 0.3), so bring
     // saturated tones down to about the clean level: k 1 -> 1, k 3 -> 0.69, k 7 and up -> ~0.5.
-    this.postGain.gain.setTargetAtTime(Math.min(1, 0.5 / Math.tanh(cfg.k * 0.3)), now, tc);
+    this.postGain.gain.setTargetAtTime(Math.min(1, 0.5 / Math.tanh(k * 0.3)), now, tc);
     this.cabLP.frequency.setTargetAtTime(cfg.cabLP, now, tc);
     this.cabPeak.frequency.setTargetAtTime(cfg.cabPeakFreq, now, tc);
     this.cabPeak.gain.setTargetAtTime(cfg.cabPeakGain, now, tc);
@@ -289,17 +363,31 @@ export class GuitarSynth {
     const now = this.ctx.currentTime;
     const startTime = Math.max(now, Number(when) || now);
     const noteDur = Math.max(0.05, Math.min(2.9, Number(dur) || 0.4));
-    const buf = this._getPluckBuffer(midi);
+
+    // A recorded sample when this tone's set is decoded, else the plucked-string model.
+    const setName = SAMPLE_SETS[this.toneId];
+    const set = setName ? this.sampleSets.get(setName) : null;
+    const sample = set && !set.failed ? set.pick(Math.round(midi)) : null;
 
     const src = this.ctx.createBufferSource();
-    src.buffer = buf;
+    let sampleGain = 1;
+    if (sample) {
+      src.buffer = sample.buffer;
+      // Samples are tuned to A4 = 440 Hz; follow the player's reference pitch and any fractional midi.
+      const a4Ratio = (Number(this.a4) || 440) / 440;
+      src.playbackRate.value = sample.rate * a4Ratio * Math.pow(2, (midi - Math.round(midi)) / 12);
+      sampleGain = SAMPLE_GAIN[setName] ?? 0.8;
+    } else {
+      src.buffer = this._getPluckBuffer(midi);
+    }
 
     const env = this.ctx.createGain();
     const humanize = 1 + (Math.random() * 2 - 1) * 0.08;
     const baseGain = Math.max(0.01, Math.min(1.5, Number(gain) || 0.8));
-    const peakGain = Math.max(0.01, Math.min(1.5, baseGain * humanize));
+    const peakGain = Math.max(0.01, Math.min(1.5, baseGain * humanize)) * sampleGain;
     const k = TONE_PRESETS[this.toneId]?.k ?? 1;
-    const releaseSec = k >= 7 ? 0.08 : 0.045;
+    // Recorded notes get a longer, natural-sounding release (fingers lifting off) instead of a click stop.
+    const releaseSec = sample ? 0.12 : (k >= 7 ? 0.08 : 0.045);
 
     env.gain.setValueAtTime(0.0001, startTime);
     env.gain.linearRampToValueAtTime(peakGain, startTime + 0.004);

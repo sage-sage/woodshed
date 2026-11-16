@@ -17,3 +17,6 @@ Additional components and runtime notices:
 - DaisySP-LGPL (Electrosmith) — GNU LGPL v2.1: the "Lush" reverb (ReverbSc).
   https://github.com/electro-smith/DaisySP and https://github.com/electro-smith/DaisySP-LGPL
 
+- Guide guitar samples: FluidR3_GM SoundFont by Frank Wen, as rendered by gleitz/midi-js-soundfonts,
+  licensed CC BY 3.0 (https://creativecommons.org/licenses/by/3.0/).
+- Fonts: Rye, Ultra, Archivo, Archivo Narrow and JetBrains Mono (SIL Open Font License), via Google Fonts.

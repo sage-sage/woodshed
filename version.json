@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T17:49:50-08:00"
+  "updated": "2026-11-15T21:46:26-08:00"
  },
  "setup": {
-  "version": "2.2.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.2.0/Woodshed-Setup.exe",
-  "sha256": "39d1373106f58a77dfdaad528617f2b29224c3bce8017edbcc3d415b9697becf",
-  "notes": "Woodshed 2.2.0: Songsterr tabs import with exact rhythm (Tab Grabber 1.3 reads the note data); Pedalboard page with a 2D board, cables, mixer and volume tiles; your own presets (new, duplicate, rename, delete, export, import); update-check screen in the desktop app"
+  "version": "2.3.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.3.0/Woodshed-Setup.exe",
+  "sha256": "81e37beba27c8b1b0ab0e5cd628555438692cd1aa82451f38f2cd96c8978f3ea",
+  "notes": "Woodshed 2.3.0: new look (Rodeo Night: poster type, square corners, vermilion for the main action; new song tiles) and a guide guitar that plays recorded FluidR3 guitar samples"
  },
  "amp": {
-  "version": "2.2.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.2.0/woodshed-amp.exe",
-  "sha256": "d89a99e7de1588931494c70336092a526765ab9df58b2f16b9e156f172fe9edf",
-  "notes": "Woodshed 2.2.0: Songsterr tabs import with exact rhythm (Tab Grabber 1.3 reads the note data); Pedalboard page with a 2D board, cables, mixer and volume tiles; your own presets (new, duplicate, rename, delete, export, import); update-check screen in the desktop app"
+  "version": "2.3.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.3.0/woodshed-amp.exe",
+  "sha256": "b0ce24cbe299955148dd1b03e19235b88c0cf909f2c3e39748c58c5c05767393",
+  "notes": "Woodshed 2.3.0: new look (Rodeo Night: poster type, square corners, vermilion for the main action; new song tiles) and a guide guitar that plays recorded FluidR3 guitar samples"
  },
  "extension": {
   "version": "1.3.0",

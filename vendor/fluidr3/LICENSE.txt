@@ -1,0 +1,3 @@
+FluidR3_GM guitar samples (FluidR3_GM SoundFont by Frank Wen, rendered by gleitz/midi-js-soundfonts).
+License: Creative Commons Attribution 3.0 — https://creativecommons.org/licenses/by/3.0/
+Converted for Woodshed: notes kept within guitar/bass range, base64 MP3 per MIDI note.

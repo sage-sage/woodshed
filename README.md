@@ -48,3 +48,8 @@ the detector and should score 95% or better.
 
 Guitar Pro / MusicXML parsing uses [alphaTab](https://alphatab.net) (MPL-2.0), vendored unmodified in
 `vendor/`.
+
+## Credits
+
+- Guide guitar samples: FluidR3_GM SoundFont by Frank Wen, rendered by [gleitz/midi-js-soundfonts](https://github.com/gleitz/midi-js-soundfonts), licensed [CC BY 3.0](https://creativecommons.org/licenses/by/3.0/). Stored in `vendor/fluidr3/`.
+- Fonts: Rye, Ultra, Archivo, Archivo Narrow, JetBrains Mono (SIL Open Font License) via Google Fonts.
