@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T16:56:34-08:00"
+  "updated": "2026-11-15T17:02:24-08:00"
  },
  "setup": {
-  "version": "2.0.3",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.3/Woodshed-Setup.exe",
-  "sha256": "356303ee9942f51989d75765c77843a0cb583fea673598e34f975cfb6a41305c",
-  "notes": "Woodshed 2.0.3: Woodshed Amp uses the Woodshed pick as its tray icon; Open Woodshed opens the desktop app when it is installed"
+  "version": "2.0.4",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.4/Woodshed-Setup.exe",
+  "sha256": "e77e5aeb3e7434c81701d9da92dc6b5fe72f7cd585a2d15868f640c5f46071bf",
+  "notes": "Woodshed 2.0.4: Check for updates shows what it is doing and the result next to the button; clearer amp and backup texts in the app"
  },
  "amp": {
-  "version": "2.0.3",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.3/woodshed-amp.exe",
-  "sha256": "d242a42b80d90172ce2e45976d91c6dad5c7824d82c0c87e980796dcbfdf19d0",
-  "notes": "Woodshed 2.0.3: Woodshed Amp uses the Woodshed pick as its tray icon; Open Woodshed opens the desktop app when it is installed"
+  "version": "2.0.4",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.4/woodshed-amp.exe",
+  "sha256": "be0102b55d71bb94f66376d161b9c1dcf3fdc1ba6916662926824f485e028997",
+  "notes": "Woodshed 2.0.4: Check for updates shows what it is doing and the result next to the button; clearer amp and backup texts in the app"
  },
  "extension": {
   "version": "1.2.0",

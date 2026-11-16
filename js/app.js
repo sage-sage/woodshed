@@ -14,7 +14,7 @@ import { mount as mountSync } from './sync-ui.js';
 import { mount as mountSetup } from './setup.js';
 import { runCalibration } from './calibrate.js';
 import { fetchLatest, compareVersions } from './updates.js';
-import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates, mountTitleBar } from './desktop.js';
+import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates, mountTitleBar, updateState, installUpdate, postToHost } from './desktop.js';
 import {
   detectTabLibrary,
   getExtensionVersion,
@@ -808,10 +808,13 @@ function showVersions(container) {
     const ampHave = amp.state === 'online' ? (amp.serverInfo?.version || '') : '';
     const setupLatest = latest?.setup?.version || '';
     if (isDesktop) {
-      const newer = setupLatest && compareVersions(setupLatest, desktop.version) > 0;
-      line('#dl-amp-ver', newer
-        ? `This is Woodshed ${escapeHtml(desktop.version)}; ${escapeHtml(setupLatest)} is available.`
-        : `This is Woodshed ${escapeHtml(desktop.version)}${setupLatest ? ': up to date' : ''}.`, newer ? 'warn' : (setupLatest ? 'good' : ''));
+      // The page's own look at version.json, shown until the app's check (button or automatic) answers.
+      if (updateState.status === 'idle') {
+        const newer = setupLatest && compareVersions(setupLatest, desktop.version) > 0;
+        line('#dl-amp-ver', newer
+          ? `This is Woodshed ${escapeHtml(desktop.version)}; ${escapeHtml(setupLatest)} is available.`
+          : `This is Woodshed ${escapeHtml(desktop.version)}${setupLatest ? ': up to date' : ''}.`, newer ? 'warn' : (setupLatest ? 'good' : ''));
+      }
     } else if (!ampHave) {
       line('#dl-amp-ver', setupLatest || ampLatest ? `Latest: ${escapeHtml(setupLatest || ampLatest)}` : '');
     } else if (ampLatest && compareVersions(ampLatest, ampHave) > 0) {
@@ -977,7 +980,7 @@ function mountSettings(container) {
           <h2 class="bk-title">Library Backup</h2>
           <button type="button" class="btn btn-ghost btn-sm" id="btn-run-setup">Run setup guide</button>
         </div>
-        <p class="bk-desc">Your songs live only in this browser. Back up everything (songs, sync points, scores, attached audio and settings) to one file, and restore it here or on another computer.</p>
+        <p class="bk-desc">Your songs live only in ${isDesktop ? 'this app (the website keeps its own separate library)' : 'this browser'}. Back up everything (songs, sync points, scores, attached audio and settings) to one file, and restore it here or on another computer.</p>
         <div class="bk-actions">
           <button type="button" class="btn btn-primary" id="bk-save">Back Up All</button>
           <button type="button" class="btn" id="bk-restore">Restore…</button>
@@ -989,7 +992,35 @@ function mountSettings(container) {
   `;
 
   const stopVersions = showVersions(container);
-  container.querySelector('#dl-check-update')?.addEventListener('click', () => checkDesktopUpdate?.());
+  // Desktop app: the button and the line under it follow the update check (js/desktop.js updateState).
+  const updBtn = container.querySelector('#dl-check-update');
+  const renderUpdate = () => {
+    const el = container.querySelector('#dl-amp-ver');
+    if (!updBtn || !el) return;
+    const st = updateState;
+    const ver = escapeHtml(desktop.version);
+    const when = st.checkedAt ? new Date(st.checkedAt).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' }) : '';
+    updBtn.disabled = st.status === 'checking' || st.status === 'installing';
+    updBtn.textContent = st.status === 'checking' ? 'Checking…'
+      : st.status === 'installing' ? 'Updating…'
+      : st.status === 'available' ? `Update to ${st.version}`
+      : 'Check for updates';
+    updBtn.classList.toggle('is-busy', updBtn.disabled);
+    const set = (html, kind) => { el.innerHTML = html; el.className = `dl-version${kind ? ` is-${kind}` : ''}`; };
+    if (st.status === 'checking') set(`<span class="spinner-dot"></span> Looking for a newer version of Woodshed…`);
+    else if (st.status === 'installing') set('Downloading the update. Woodshed closes, installs it and opens again by itself.', 'warn');
+    else if (st.status === 'available') set(`Woodshed ${escapeHtml(st.version)} is available (you have ${ver}). Click <b>Update to ${escapeHtml(st.version)}</b> to install it.`, 'warn');
+    else if (st.status === 'none') set(`You have the latest version, Woodshed ${ver}.${when ? ` Checked at ${when}.` : ''}`, 'good');
+    else if (st.status === 'failed') set(`Couldn’t check for updates: ${escapeHtml(st.error)}. You have Woodshed ${ver}.`, 'bad');
+  };
+  updBtn?.addEventListener('click', () => {
+    if (updateState.status === 'available') installUpdate();
+    else checkDesktopUpdate?.();
+  });
+  if (updBtn) {
+    window.addEventListener('woodshed-update', renderUpdate);
+    if (updateState.status !== 'idle') renderUpdate();
+  }
 
   const renderBackupStatus = () => {
     const el = container.querySelector('#bk-status');
@@ -1200,11 +1231,21 @@ function mountSettings(container) {
     if (amp.state !== 'online') {
       body.innerHTML = `
         <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
-          <p style="margin:0;color:var(--text-muted);">Woodshed Amp is the small companion app that plays your guitar through an amp tone with almost no delay (via your interface's ASIO driver) and sends the signal here for scoring. Start <code>woodshed-amp.exe</code> and this page connects by itself.</p>
-          <button type="button" class="btn btn-sm" id="amp-btn-reconnect">Reconnect</button>
+          <p style="margin:0;color:var(--text-muted);">Woodshed Amp is the small companion app that plays your guitar through an amp tone with almost no delay (via your interface's ASIO driver) and sends the signal here for scoring. ${
+            isDesktop && desktop.ampInstalled ? 'It is installed but not running.'
+            : isDesktop ? 'It isn’t installed: run Woodshed Setup again and tick Woodshed Amp.'
+            : 'Install it with Woodshed Setup (below) or start it from the Start menu, and this page connects by itself.'}</p>
+          ${isDesktop && desktop.ampInstalled
+            ? '<button type="button" class="btn btn-sm btn-primary" id="amp-btn-start">Start Woodshed Amp</button>'
+            : '<button type="button" class="btn btn-sm" id="amp-btn-reconnect">Reconnect</button>'}
         </div>
       `;
       body.querySelector('#amp-btn-reconnect')?.addEventListener('click', () => amp.connect());
+      body.querySelector('#amp-btn-start')?.addEventListener('click', (e) => {
+        postToHost({ type: 'launch-amp' });
+        e.currentTarget.disabled = true;
+        e.currentTarget.textContent = 'Starting…';
+      });
       return;
     }
 
@@ -1518,6 +1559,7 @@ function mountSettings(container) {
       amp.removeEventListener('devices', renderAmpCard);
       amp.removeEventListener('status', updateAmpStatusUI);
       stopVersions();
+      window.removeEventListener('woodshed-update', renderUpdate);
     }
   };
 }
