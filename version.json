@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T16:15:46-08:00"
+  "updated": "2026-11-15T16:48:08-08:00"
  },
  "setup": {
-  "version": "2.0.1",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.1/Woodshed-Setup.exe",
-  "sha256": "687b6054b735e8ad80c221acff4bdfc2224520a5f08071fee379390205cb87a0",
-  "notes": "Woodshed 2.0.1: custom title bar in the desktop app"
+  "version": "2.0.2",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.2/Woodshed-Setup.exe",
+  "sha256": "2f14a2a8090fcc0dfb87f0a373083bba83b9826aabc9017c755a61371599aaa2",
+  "notes": "Woodshed 2.0.2: amp presets fold away and open into a fader deck; the Active preset badge follows the amp"
  },
  "amp": {
-  "version": "2.0.1",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.1/woodshed-amp.exe",
-  "sha256": "540d9f6b35feac409f312abe0f1a916fa05990f67c3e749b489056a461c386a8",
-  "notes": "Woodshed 2.0.1: custom title bar in the desktop app"
+  "version": "2.0.2",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.2/woodshed-amp.exe",
+  "sha256": "ce11cdd8844090c1c1f4cf2bf8945e0427fa0e8e580ecaad93944bc236cccbad",
+  "notes": "Woodshed 2.0.2: amp presets fold away and open into a fader deck; the Active preset badge follows the amp"
  },
  "extension": {
   "version": "1.2.0",

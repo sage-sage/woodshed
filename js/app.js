@@ -1155,9 +1155,14 @@ function mountSettings(container) {
     return Math.max(0, Math.min(100, Math.round(((val + 60) / 60) * 100)));
   }
 
+  let renderedPresetId = null;
   function updateAmpStatusUI() {
     const st = amp.status;
     if (!st) return;
+    if (st.preset && renderedPresetId !== null && st.preset !== renderedPresetId) {
+      renderAmpCard(); // the active preset changed (from here, the tray menu, or a song's tone)
+      return;
+    }
     const devEl = container.querySelector('#amp-stat-device');
     const rateEl = container.querySelector('#amp-stat-rate');
     const bufEl = container.querySelector('#amp-stat-buffer');
@@ -1181,6 +1186,8 @@ function mountSettings(container) {
     if (muteBtn) muteBtn.classList.toggle('btn-primary', Boolean(st.mute));
   }
 
+  // Presets are collapsed by default; remember which ones the player opened across re-renders.
+  const openPresets = new Set();
   function renderAmpCard() {
     const chip = container.querySelector('#amp-conn-chip');
     const body = container.querySelector('#amp-card-body');
@@ -1205,7 +1212,9 @@ function mountSettings(container) {
     const deviceList = amp.devices?.list || [];
     const currentDevice = st.device || amp.devices?.current || '';
     const presetList = amp.presets?.list || [];
-    const currentPresetId = amp.presets?.current || st.preset || '';
+    // status.preset is the live one (the presets list is only re-sent when presets change).
+    const currentPresetId = st.preset || amp.presets?.current || '';
+    renderedPresetId = currentPresetId;
     // Non-ASIO "Also play through" output (laptop speakers etc.), mixed by Woodshed Amp 1.1+.
     const monitorOutputs = amp.devices?.outputs || [];
     const monitorOutput = amp.devices?.monitorOutput || '';
@@ -1234,43 +1243,51 @@ function mountSettings(container) {
     const presetsHtml = presetList.map((p) => {
       const isCurrent = p.id === currentPresetId;
       const params = p.params || {};
-      const slidersHtml = sliderKeys.map(([key, lbl]) => {
-        const val = Number.isFinite(params[key]) ? params[key] : 5;
-        return `
-          <div class="field" style="margin:0;">
-            <label style="font-size:0.78rem;">${lbl} (<span class="tabular" data-param-val="${p.id}:${key}">${val.toFixed(1)}</span>)</label>
-            <input type="range" class="slider amp-param-slider" data-preset-id="${p.id}" data-param-key="${key}" min="0" max="10" step="0.1" value="${val}" />
-          </div>
-        `;
-      }).join('');
+      const valOf = (key) => (Number.isFinite(params[key]) ? params[key] : 5);
+      const fadersHtml = sliderKeys.map(([key, lbl]) => `
+          <label class="fader">
+            <span class="fader-val tabular" data-param-val="${p.id}:${key}">${valOf(key).toFixed(1)}</span>
+            <span class="fader-slot">
+              <input type="range" class="fader-input amp-param-slider" data-preset-id="${p.id}" data-param-key="${key}"
+                min="0" max="10" step="0.1" value="${valOf(key)}" aria-label="${lbl}" />
+            </span>
+            <span class="fader-label">${lbl}</span>
+          </label>`).join('');
+      const summary = sliderKeys.map(([key, lbl]) =>
+        `<span>${lbl} <b class="tabular" data-param-sum="${p.id}:${key}">${valOf(key).toFixed(1)}</b></span>`).join('');
+      const files = [p.nam ? `Capture: ${escapeHtml(p.nam)}` : '', p.ir ? `IR: ${escapeHtml(p.ir)}` : ''].filter(Boolean).join(' · ');
 
       return `
-        <div class="card" style="padding:12px;margin-top:10px;">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px;">
-            <div style="display:flex;align-items:center;gap:8px;">
-              <strong>${p.name || p.id}</strong>
-              ${isCurrent ? '<span class="chip chip-accent">Active</span>' : `<button type="button" class="btn btn-sm btn-ghost amp-select-preset" data-id="${p.id}">Select</button>`}
+        <details class="amp-preset${isCurrent ? ' is-active' : ''}" data-id="${p.id}" ${openPresets.has(p.id) ? 'open' : ''}>
+          <summary class="amp-preset-head">
+            <span class="amp-preset-chevron" aria-hidden="true"></span>
+            <strong class="amp-preset-name">${escapeHtml(p.name || p.id)}</strong>
+            ${isCurrent ? '<span class="chip chip-accent">Active</span>' : `<button type="button" class="btn btn-sm btn-ghost amp-select-preset" data-id="${p.id}">Select</button>`}
+            <span class="amp-preset-summary">${summary}${files ? `<span class="amp-preset-files">${files}</span>` : ''}</span>
+          </summary>
+          <div class="amp-preset-deck">
+            <div class="amp-preset-files-panel">
+              <div class="amp-file-row">
+                <span class="stat-label">Capture (.nam)</span>
+                <strong class="amp-file-name">${escapeHtml(p.nam || 'None (built-in amp)')}</strong>
+                <span class="amp-file-btns">
+                  <button type="button" class="btn btn-sm amp-browse-btn" data-id="${p.id}" data-kind="nam">Load</button>
+                  ${p.nam ? `<button type="button" class="btn btn-sm btn-ghost amp-clear-btn" data-id="${p.id}" data-kind="nam">Clear</button>` : ''}
+                </span>
+              </div>
+              <div class="amp-file-row">
+                <span class="stat-label">Cabinet IR (.wav)</span>
+                <strong class="amp-file-name">${escapeHtml(p.ir || 'None (built-in cab)')}</strong>
+                <span class="amp-file-btns">
+                  <button type="button" class="btn btn-sm amp-browse-btn" data-id="${p.id}" data-kind="ir">Load</button>
+                  ${p.ir ? `<button type="button" class="btn btn-sm btn-ghost amp-clear-btn" data-id="${p.id}" data-kind="ir">Clear</button>` : ''}
+                </span>
+              </div>
+              <button type="button" class="btn btn-sm btn-ghost amp-reset-preset" data-id="${p.id}">Reset to default</button>
             </div>
-            <button type="button" class="btn btn-sm btn-ghost amp-reset-preset" data-id="${p.id}">Reset</button>
+            <div class="fader-bank">${fadersHtml}</div>
           </div>
-
-          <div style="display:flex;gap:16px;flex-wrap:wrap;align-items:center;margin-bottom:10px;font-size:0.84rem;">
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span>Capture: <strong>${p.nam || 'None'}</strong></span>
-              <button type="button" class="btn btn-sm amp-browse-btn" data-id="${p.id}" data-kind="nam">Load .nam</button>
-              <button type="button" class="btn btn-sm btn-ghost amp-clear-btn" data-id="${p.id}" data-kind="nam">Clear</button>
-            </div>
-            <div style="display:flex;align-items:center;gap:6px;">
-              <span>Cabinet IR: <strong>${p.ir || 'None'}</strong></span>
-              <button type="button" class="btn btn-sm amp-browse-btn" data-id="${p.id}" data-kind="ir">Load .wav</button>
-              <button type="button" class="btn btn-sm btn-ghost amp-clear-btn" data-id="${p.id}" data-kind="ir">Clear</button>
-            </div>
-          </div>
-
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px;">
-            ${slidersHtml}
-          </div>
-        </div>
+        </details>
       `;
     }).join('');
 
@@ -1362,7 +1379,7 @@ function mountSettings(container) {
 
       <div>
         <span class="stat-label">Presets</span>
-        ${presetsHtml || '<p class="empty-state">No presets reported by Woodshed Amp.</p>'}
+        <div class="amp-preset-list">${presetsHtml || '<p class="empty-state">No presets reported by Woodshed Amp.</p>'}</div>
       </div>
     `;
 
@@ -1412,7 +1429,17 @@ function mountSettings(container) {
     });
 
     body.querySelectorAll('.amp-select-preset').forEach((btn) => {
-      btn.addEventListener('click', () => amp.setPreset(btn.dataset.id));
+      btn.addEventListener('click', (e) => {
+        e.preventDefault(); // it sits in the <summary>: don't also open/close the preset
+        amp.setPreset(btn.dataset.id);
+      });
+    });
+
+    body.querySelectorAll('.amp-preset').forEach((el) => {
+      el.addEventListener('toggle', () => {
+        if (el.open) openPresets.add(el.dataset.id);
+        else openPresets.delete(el.dataset.id);
+      });
     });
 
     body.querySelectorAll('.amp-reset-preset').forEach((btn) => {
@@ -1434,6 +1461,8 @@ function mountSettings(container) {
         const val = parseFloat(slider.value);
         const valEl = body.querySelector(`[data-param-val="${pid}:${key}"]`);
         if (valEl) valEl.textContent = val.toFixed(1);
+        const sumEl = body.querySelector(`[data-param-sum="${pid}:${key}"]`);
+        if (sumEl) sumEl.textContent = val.toFixed(1);
         amp.setParam(pid, key, val);
       });
     });
