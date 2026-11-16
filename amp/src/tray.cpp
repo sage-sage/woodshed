@@ -57,6 +57,7 @@ bool TrayApp::create(HINSTANCE hInstance, UINT alreadyRunningMsg) {
     hInstance_ = hInstance;
     alreadyRunningMsg_ = alreadyRunningMsg;
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
+    quitForUpdateMsg_ = RegisterWindowMessageW(L"WoodshedQuitForUpdate");
 
     hIcon16_ = createRubyJewelIcon(16);
     hIcon32_ = createRubyJewelIcon(32);
@@ -436,6 +437,13 @@ LRESULT TrayApp::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
+    if (quitForUpdateMsg_ != 0 && msg == quitForUpdateMsg_) {
+        controller_.stop();
+        removeTrayIcon();
+        PostQuitMessage(0);
+        return 0;
+    }
+
     switch (msg) {
         case kMsgTrayCallback: {
             const UINT event = LOWORD(lParam);
@@ -492,6 +500,12 @@ LRESULT TrayApp::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
 
         case kMsgUpdateReady: {
             installInProgress_ = false;
+            if (wParam == 1) {  // the installer is running and relaunches us
+                controller_.stop();
+                removeTrayIcon();
+                PostQuitMessage(0);
+                return 0;
+            }
             controller_.stop();
             removeTrayIcon();
 

@@ -1,12 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T15:53:52-08:00"
+  "updated": "2026-11-15T15:56:22-08:00"
+ },
+ "setup": {
+  "version": "2.0.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.0/Woodshed-Setup.exe",
+  "sha256": "d628e5bb43659ec5b12b76e568b2a58a846ef47e4d1b577c6c69a4160b384db3",
+  "notes": "Woodshed for Windows: desktop app (works offline) and a setup wizard to pick the app, Woodshed Amp and Tab Grabber"
  },
  "amp": {
-  "version": "1.3.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/amp-v1.3.0/woodshed-amp.exe",
-  "sha256": "503e42c9e3b3d94942dfc68cd2192e6ac436273a02867d619be7130463f178eb",
-  "notes": "Remove local-hosting launchers and the Download for Windows bundle; the site lives on GitHub Pages"
+  "version": "2.0.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.0/woodshed-amp.exe",
+  "sha256": "bc89b1c686279b45228e611e4b00b0578fac56634f617be951aacdb921342bd4",
+  "notes": "Woodshed for Windows: desktop app (works offline) and a setup wizard to pick the app, Woodshed Amp and Tab Grabber"
  },
  "extension": {
   "version": "1.2.0",

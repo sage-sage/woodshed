@@ -13,10 +13,10 @@ class TrayApp {
 public:
     static constexpr UINT kMsgTrayCallback = WM_APP + 1;
     static constexpr UINT kMsgBalloon = WM_APP + 2;
-    static constexpr UINT kMsgUpdateAvailable = WM_APP + 3;
-    static constexpr UINT kMsgUpdateNone = WM_APP + 4;
-    static constexpr UINT kMsgUpdateFailed = WM_APP + 5;
-    static constexpr UINT kMsgUpdateReady = WM_APP + 6;
+    static constexpr UINT kMsgUpdateAvailable = wsamp::kMsgUpdateAvailable;
+    static constexpr UINT kMsgUpdateNone = wsamp::kMsgUpdateNone;
+    static constexpr UINT kMsgUpdateFailed = wsamp::kMsgUpdateFailed;
+    static constexpr UINT kMsgUpdateReady = wsamp::kMsgUpdateReady;
     static constexpr UINT_PTR kTimerTooltip = 1;
     static constexpr UINT_PTR kTimerUpdateFirst = 2;
     static constexpr UINT_PTR kTimerUpdateRepeat = 3;
@@ -54,6 +54,7 @@ private:
     HICON hIcon32_ = nullptr;
     UINT alreadyRunningMsg_ = 0;
     UINT taskbarCreatedMsg_ = 0;
+    UINT quitForUpdateMsg_ = 0;
     bool iconAdded_ = false;
 };
 

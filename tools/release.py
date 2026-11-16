@@ -28,7 +28,7 @@ REPO = "woodshed"
 SITE_FILES = ["index.html", "README.md"]
 SITE_DIRS = ["css", "js", "vendor", "icons", "downloads", "test", "tools"]
 AMP_FILES = ["build.sh", "CMakeLists.txt", "SPEC.md", "README.md"]
-AMP_DIRS = ["src", "tools", "tests"]
+AMP_DIRS = ["src", "tools", "tests", "installer"]
 
 
 def run(cmd, cwd=PUB, check=True, capture=False):
@@ -42,8 +42,20 @@ def owner():
 
 
 def amp_version():
-    m = re.search(r'kAmpVersion\s*=\s*"(\d+\.\d+\.\d+)"', open(os.path.join(AMP, "src", "version.h")).read())
+    m = re.search(r'kAppVersion\s*=\s*"(\d+\.\d+\.\d+)"', open(os.path.join(AMP, "src", "version.h")).read())
     return m.group(1)
+
+
+ISCC = os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Inno Setup 6", "ISCC.exe")
+
+
+def build_installer(ver):
+    """Woodshed-Setup.exe (desktop app + amp + extension) via Inno Setup; the app bundles this site."""
+    out = os.path.join(AMP, "dist")
+    subprocess.run([ISCC, "/Q", f"/DAppVersion={ver}", f"/DBuildDir={os.path.join(AMP, 'build')}",
+                    f"/DSiteDir={SITE}", f"/DExtDir={EXT}", f"/DOutDir={out}",
+                    os.path.join(AMP, "installer", "woodshed.iss")], check=True)
+    return os.path.join(out, "Woodshed-Setup.exe")
 
 
 def ext_version():
@@ -105,26 +117,38 @@ def main():
         sys.exit("amp/src/version.h does not name this GitHub account: fix kGhOwner and rebuild the amp")
 
     run([sys.executable, "-I", os.path.join(HERE, "package.py")], cwd=SITE)
-    tag = f"amp-v{ver}"
+    # One version for the desktop app, the amp and the installer (kAppVersion in amp src/version.h).
+    # A new GitHub release (tag v<ver>) is made only when that version has no release yet, so to ship site
+    # changes to the desktop app, bump kAppVersion/kAmpVersion and rebuild the amp first.
+    tag = f"v{ver}"
+    repo = f"{gh_owner}/{REPO}"
+    released = run(["gh", "release", "view", tag, "-R", repo], check=False, capture=False) == 0 if not dry else False
+    setup = os.path.join(AMP, "dist", "Woodshed-Setup.exe")
+    old_path = os.path.join(PUB, "version.json")
+    old = json.load(open(old_path, encoding="utf-8")) if os.path.exists(old_path) else {}
+    if not released:
+        setup = build_installer(ver)
+        setup_sha = sha256(setup)
+    else:
+        setup_sha = old.get("setup", {}).get("sha256", "")
+    base = f"https://github.com/{gh_owner}/{REPO}/releases/download/{tag}/"
     manifest = {
         "site": {"updated": subprocess.run(["git", "log", "-1", "--format=%cI"], cwd=PUB, text=True,
                                            capture_output=True).stdout.strip() or None},
-        "amp": {
-            "version": ver,
-            "url": f"https://github.com/{gh_owner}/{REPO}/releases/download/{tag}/woodshed-amp.exe",
-            "sha256": sha256(exe),
-            "notes": notes,
-        },
+        "setup": {"version": ver, "url": base + "Woodshed-Setup.exe", "sha256": setup_sha, "notes": notes},
+        # Portable (not installed) amps update by swapping this exe.
+        "amp": {"version": ver, "url": base + "woodshed-amp.exe", "sha256": sha256(exe), "notes": notes},
         "extension": {"version": ext_version(), "url": "downloads/woodshed-tab-grabber.zip"},
     }
-    old_path = os.path.join(PUB, "version.json")
-    old = json.load(open(old_path, encoding="utf-8")) if os.path.exists(old_path) else {}
-    if old.get("amp", {}).get("version") == ver and old["amp"].get("sha256") != manifest["amp"]["sha256"]:
-        sys.exit(f"the amp .exe changed but is still {ver}: bump kAmpVersion in amp src/version.h and rebuild")
+    if released and old.get("amp", {}).get("sha256") not in (None, manifest["amp"]["sha256"]):
+        sys.exit(f"the amp .exe changed but {ver} is already released: bump kAppVersion/kAmpVersion and rebuild")
+    if released:
+        manifest["setup"]["notes"] = old.get("setup", {}).get("notes", notes)
+        manifest["amp"]["notes"] = old.get("amp", {}).get("notes", notes)
     sync()
     open(os.path.join(PUB, "version.json"), "w", encoding="utf-8").write(json.dumps(manifest, indent=1) + "\n")
     shutil.copy2(os.path.join(PUB, "version.json"), os.path.join(SITE, "version.json"))
-    print(f"amp {ver} sha256 {manifest['amp']['sha256'][:16]}...  extension {manifest['extension']['version']}")
+    print(f"version {ver} ({'already released' if released else 'new release'})  extension {ext_version()}")
     if dry:
         print("dry run: nothing pushed")
         return
@@ -133,11 +157,10 @@ def main():
     if run(["git", "diff", "--cached", "--quiet"], check=False) != 0:
         run(["git", "commit", "-q", "-m", notes])
         run(["git", "push", "-q", "-u", "origin", "HEAD:main"])
-    released = run(["gh", "release", "view", tag, "-R", f"{gh_owner}/{REPO}"], check=False) == 0
     if not released:
-        # Amps that check in the minute before this finishes just fail the download and try again later.
-        run(["gh", "release", "create", tag, exe, "-R", f"{gh_owner}/{REPO}", "--target", "main",
-             "-t", f"Woodshed Amp {ver}", "-n", notes])
+        # Apps that check in the minute before this finishes just fail the download and try again later.
+        run(["gh", "release", "create", tag, setup, exe, "-R", repo, "--target", "main", "--latest",
+             "-t", f"Woodshed {ver}", "-n", notes])
     print(f"done: https://{gh_owner}.github.io/{REPO}/")
 
 

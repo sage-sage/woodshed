@@ -14,7 +14,9 @@ export function compareVersions(a, b) {
 /** { amp: {version, url, notes}, extension: {version, url}, site: {version} } or null when unavailable. */
 export function fetchLatest() {
   if (!cached) {
-    cached = fetch('version.json', { cache: 'no-cache' })
+    // The desktop app bundles an old copy of version.json, so it asks the website for the current one.
+    const url = globalThis.window?.woodshedDesktop ? 'https://sage-sage.github.io/woodshed/version.json' : 'version.json';
+    cached = fetch(url, { cache: 'no-cache' })
       .then((r) => (r.ok ? r.json() : null))
       .catch(() => null);
   }

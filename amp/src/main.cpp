@@ -15,6 +15,9 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
 
     const wchar_t* cmdLine = GetCommandLineW();
     const bool isUpdated = (cmdLine != nullptr && std::wcsstr(cmdLine, L"--updated") != nullptr);
+    const bool autostartOn = (cmdLine != nullptr && std::wcsstr(cmdLine, L"--autostart=on") != nullptr);
+    const bool autostartOff = (cmdLine != nullptr && std::wcsstr(cmdLine, L"--autostart=off") != nullptr);
+    const bool hasAutostartArg = autostartOn || autostartOff;
 
     const UINT alreadyRunningMsg = RegisterWindowMessageW(L"WoodshedAmpAlreadyRunningMsg");
 
@@ -40,7 +43,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
             }
             wsamp::Updater::cleanupOld();
         } else {
-            if (alreadyRunningMsg != 0) {
+            if (!hasAutostartArg && alreadyRunningMsg != 0) {
                 PostMessageW(HWND_BROADCAST, alreadyRunningMsg, 0, 0);
             }
             return 0;
@@ -67,6 +70,11 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE /*hPrevInstance*/, LPSTR /*lpC
     }
 
     controller.start();
+    if (autostartOn) {
+        controller.enqueueSetStartWithWindows(true);
+    } else if (autostartOff) {
+        controller.enqueueSetStartWithWindows(false);
+    }
 
     MSG msg{};
     while (GetMessageW(&msg, nullptr, 0, 0) > 0) {

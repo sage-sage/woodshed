@@ -1,10 +1,10 @@
 #include <winsock2.h>
 #include <windows.h>
+#include <shellapi.h>
 #include <winhttp.h>
 #include <bcrypt.h>
 
 #include "updater.h"
-#include "tray.h"
 #include "version.h"
 #include "json.hpp"
 
@@ -21,6 +21,7 @@ namespace {
 
 constexpr size_t kMaxManifestBytes = 64 * 1024;
 constexpr uint64_t kMaxDownloadBytes = 64ull * 1024ull * 1024ull;
+constexpr uint64_t kMaxInstallerBytes = 256ull * 1024ull * 1024ull;
 constexpr uint64_t kMinExeBytes = 100ull * 1024ull;
 constexpr DWORD kHttpTimeoutMs = 10000;
 
@@ -124,6 +125,22 @@ std::wstring getExeDir(const std::wstring& exePath) {
     return (slash != std::wstring::npos) ? exePath.substr(0, slash) : L".";
 }
 
+std::wstring getTempDir() {
+    std::wstring buf(MAX_PATH + 1, L'\0');
+    DWORD len = GetTempPathW(static_cast<DWORD>(buf.size()), buf.data());
+    if (len == 0) return {};
+    if (len >= buf.size()) {
+        buf.resize(len + 1);
+        len = GetTempPathW(static_cast<DWORD>(buf.size()), buf.data());
+        if (len == 0 || len >= buf.size()) return {};
+    }
+    buf.resize(len);
+    if (!buf.empty() && buf.back() != L'\\' && buf.back() != L'/') {
+        buf.push_back(L'\\');
+    }
+    return buf;
+}
+
 bool parseSemver(std::string_view s, std::array<int, 3>& out) {
     size_t pos = 0;
     for (int part = 0; part < 3; ++part) {
@@ -166,10 +183,18 @@ bool equalsIgnoreCaseAscii(std::string_view a, std::string_view b) {
 }
 
 std::wstring makeUserAgent() {
-    return std::wstring(L"WoodshedAmp/") + kAmpVersionW;
+    return std::wstring(L"Woodshed/") + kAppVersionW;
 }
 
 } // namespace
+
+bool Updater::installerMode() {
+    const std::wstring exePath = getCurrentExePath();
+    if (exePath.empty()) return false;
+    const std::wstring uninsPath = getExeDir(exePath) + L"\\unins000.exe";
+    const DWORD attrs = GetFileAttributesW(uninsPath.c_str());
+    return attrs != INVALID_FILE_ATTRIBUTES && (attrs & FILE_ATTRIBUTE_DIRECTORY) == 0;
+}
 
 void Updater::checkAsync(HWND notify, bool manual) {
     if (manual) {
@@ -191,7 +216,7 @@ void Updater::checkAsync(HWND notify, bool manual) {
                     lastError_ = err;
                 }
                 if (isManual && notify) {
-                    PostMessageW(notify, TrayApp::kMsgUpdateFailed, 0, 0);
+                    PostMessageW(notify, kMsgUpdateFailed, 0, 0);
                 }
             };
 
@@ -259,31 +284,32 @@ void Updater::checkAsync(HWND notify, bool manual) {
                 body.append(buf.data(), bytesRead);
             }
 
+            const char* sectionKey = installerMode() ? "setup" : "amp";
             const nlohmann::json root = nlohmann::json::parse(body, nullptr, false);
-            if (root.is_discarded() || !root.is_object() || !root.contains("amp") || !root["amp"].is_object()) {
+            if (root.is_discarded() || !root.is_object() || !root.contains(sectionKey) || !root[sectionKey].is_object()) {
                 fail("Invalid update manifest format.");
                 return;
             }
 
-            const auto& amp = root["amp"];
-            if (!amp.contains("version") || !amp["version"].is_string() ||
-                !amp.contains("url") || !amp["url"].is_string() ||
-                !amp.contains("sha256") || !amp["sha256"].is_string()) {
+            const auto& entry = root[sectionKey];
+            if (!entry.contains("version") || !entry["version"].is_string() ||
+                !entry.contains("url") || !entry["url"].is_string() ||
+                !entry.contains("sha256") || !entry["sha256"].is_string()) {
                 fail("Missing fields in update manifest.");
                 return;
             }
 
             UpdateInfo info;
-            info.version = amp["version"].get<std::string>();
-            info.url = amp["url"].get<std::string>();
-            info.sha256 = amp["sha256"].get<std::string>();
-            if (amp.contains("notes") && amp["notes"].is_string()) {
-                info.notes = amp["notes"].get<std::string>();
+            info.version = entry["version"].get<std::string>();
+            info.url = entry["url"].get<std::string>();
+            info.sha256 = entry["sha256"].get<std::string>();
+            if (entry.contains("notes") && entry["notes"].is_string()) {
+                info.notes = entry["notes"].get<std::string>();
             }
 
             std::array<int, 3> remoteVer{};
             std::array<int, 3> localVer{};
-            if (!parseSemver(info.version, remoteVer) || !parseSemver(kAmpVersion, localVer)) {
+            if (!parseSemver(info.version, remoteVer) || !parseSemver(kAppVersion, localVer)) {
                 fail("Invalid version format in manifest.");
                 return;
             }
@@ -305,7 +331,7 @@ void Updater::checkAsync(HWND notify, bool manual) {
                     lastError_.clear();
                 }
                 if (notify) {
-                    PostMessageW(notify, TrayApp::kMsgUpdateAvailable, 0, 0);
+                    PostMessageW(notify, kMsgUpdateAvailable, 0, 0);
                 }
             } else {
                 {
@@ -314,7 +340,7 @@ void Updater::checkAsync(HWND notify, bool manual) {
                     lastError_.clear();
                 }
                 if (isManual && notify) {
-                    PostMessageW(notify, TrayApp::kMsgUpdateNone, 0, 0);
+                    PostMessageW(notify, kMsgUpdateNone, 0, 0);
                 }
             }
         }).detach();
@@ -349,7 +375,7 @@ void Updater::installAsync(HWND notify) {
                     lastError_ = err;
                 }
                 if (notify) {
-                    PostMessageW(notify, TrayApp::kMsgUpdateFailed, 0, 0);
+                    PostMessageW(notify, kMsgUpdateFailed, 0, 0);
                 }
             };
 
@@ -359,14 +385,26 @@ void Updater::installAsync(HWND notify) {
                 return;
             }
 
-            const std::wstring exePath = getCurrentExePath();
-            if (exePath.empty()) {
-                fail("Failed to resolve executable path.");
-                return;
+            const bool isInstaller = installerMode();
+            std::wstring exePath;
+            std::wstring oldPath;
+            if (isInstaller) {
+                const std::wstring tempDir = getTempDir();
+                if (tempDir.empty()) {
+                    fail("Failed to resolve temporary directory.");
+                    return;
+                }
+                newPath = tempDir + L"Woodshed-Setup-" + utf8ToWide(info->version) + L".exe";
+            } else {
+                exePath = getCurrentExePath();
+                if (exePath.empty()) {
+                    fail("Failed to resolve executable path.");
+                    return;
+                }
+                const std::wstring exeDir = getExeDir(exePath);
+                newPath = exeDir + L"\\woodshed-amp.new.exe";
+                oldPath = exeDir + L"\\woodshed-amp.old.exe";
             }
-            const std::wstring exeDir = getExeDir(exePath);
-            newPath = exeDir + L"\\woodshed-amp.new.exe";
-            const std::wstring oldPath = exeDir + L"\\woodshed-amp.old.exe";
 
             const std::wstring wUrl = utf8ToWide(info->url);
             URL_COMPONENTS uc{};
@@ -460,9 +498,10 @@ void Updater::installAsync(HWND notify) {
                 }
 
                 totalBytes += bytesRead;
-                if (totalBytes > kMaxDownloadBytes) {
+                const uint64_t maxDownload = isInstaller ? kMaxInstallerBytes : kMaxDownloadBytes;
+                if (totalBytes > maxDownload) {
                     hFile.close();
-                    fail("Update package exceeds 64 MB limit.");
+                    fail("Update package exceeds size limit.");
                     return;
                 }
 
@@ -505,23 +544,47 @@ void Updater::installAsync(HWND notify) {
                 return;
             }
 
-            if (!MoveFileExW(exePath.c_str(), oldPath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                fail("Failed to back up current executable.");
-                return;
-            }
-            if (!MoveFileExW(newPath.c_str(), exePath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
-                MoveFileExW(oldPath.c_str(), exePath.c_str(), MOVEFILE_REPLACE_EXISTING);
-                fail("Failed to replace executable.");
-                return;
-            }
-            newPath.clear();
+            if (isInstaller) {
+                const std::wstring installerPath = newPath;
+                newPath.clear();
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    lastError_.clear();
+                }
+                const HINSTANCE execRes = ShellExecuteW(
+                    nullptr,
+                    L"open",
+                    installerPath.c_str(),
+                    L"/VERYSILENT /SUPPRESSMSGBOXES /NORESTART /RELAUNCH",
+                    nullptr,
+                    SW_SHOWNORMAL);
+                if (reinterpret_cast<INT_PTR>(execRes) <= 32) {
+                    DeleteFileW(installerPath.c_str());
+                    fail("Failed to launch update installer.");
+                    return;
+                }
+                if (notify) {
+                    PostMessageW(notify, kMsgUpdateReady, 1, 0);
+                }
+            } else {
+                if (!MoveFileExW(exePath.c_str(), oldPath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                    fail("Failed to back up current executable.");
+                    return;
+                }
+                if (!MoveFileExW(newPath.c_str(), exePath.c_str(), MOVEFILE_REPLACE_EXISTING)) {
+                    MoveFileExW(oldPath.c_str(), exePath.c_str(), MOVEFILE_REPLACE_EXISTING);
+                    fail("Failed to replace executable.");
+                    return;
+                }
+                newPath.clear();
 
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                lastError_.clear();
-            }
-            if (notify) {
-                PostMessageW(notify, TrayApp::kMsgUpdateReady, 0, 0);
+                {
+                    std::lock_guard<std::mutex> lock(mutex_);
+                    lastError_.clear();
+                }
+                if (notify) {
+                    PostMessageW(notify, kMsgUpdateReady, 0, 0);
+                }
             }
         }).detach();
     } catch (...) {

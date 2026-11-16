@@ -2,6 +2,7 @@ import { resumeAudio } from './audio-context.js';
 import { GuitarInput } from './audio-input.js';
 import { midiToName } from './song.js';
 import { runCalibration } from './calibrate.js';
+import { isDesktop, desktop, postToHost, SETUP_URL } from './desktop.js';
 
 const STEPS = ['Connect', 'Level', 'Calibrate', 'Tune'];
 
@@ -45,7 +46,8 @@ export function mount(container, ctx) {
               <p class="setup-amp-body">The partner app "Woodshed Amp" is highly recommended. It allows Woodshed to listen to your guitar with ultra-low latency, and lets you hear your own playing with preset or custom sounds.</p>
               <p class="setup-status" id="setup-amp-status"></p>
             </div>
-            <a class="btn btn-primary" id="setup-amp-dl" href="downloads/woodshed-amp.zip" download="Woodshed Amp.zip">Download Woodshed Amp</a>
+            <a class="btn btn-primary" id="setup-amp-dl" href="${SETUP_URL}">Download Woodshed Setup</a>
+            <button type="button" class="btn btn-primary" id="setup-amp-start" hidden>Start Woodshed Amp</button>
           </div>
           <p class="setup-body">Plug your guitar into input 1 of your audio interface (on a MOTU M2: input 1, with its gain at about noon). If Woodshed Amp is running, Woodshed uses it automatically.</p>
           <div class="setup-fields">
@@ -148,14 +150,23 @@ export function mount(container, ctx) {
   const ampBox = container.querySelector('#setup-amp');
   const ampStatus = container.querySelector('#setup-amp-status');
   const ampDl = container.querySelector('#setup-amp-dl');
+  const ampStart = container.querySelector('#setup-amp-start');
+  ampStart.addEventListener('click', () => {
+    postToHost({ type: 'launch-amp' });
+    setStatus(ampStatus, 'Starting Woodshed Amp...');
+  });
   function syncAmpBox() {
     const online = ctx.amp?.state === 'online';
+    const installedHere = isDesktop && desktop.ampInstalled;
     ampBox.classList.toggle('is-online', online);
-    ampDl.hidden = online;
-    setStatus(ampStatus, online
-      ? 'Woodshed Amp is running and connected.'
-      : 'Unzip it and run woodshed-amp.exe. This page connects to it by itself and it keeps itself up to date.',
-      online ? 'good' : '');
+    ampDl.hidden = online || installedHere;
+    ampStart.hidden = online || !installedHere;
+    let text;
+    if (online) text = 'Woodshed Amp is running and connected.';
+    else if (installedHere) text = 'Woodshed Amp is installed but not running.';
+    else if (isDesktop) text = 'Run Woodshed Setup again and tick Woodshed Amp. This app connects to it by itself.';
+    else text = 'Run Woodshed Setup and tick Woodshed Amp (you can skip the app). This page connects to it by itself, and it keeps itself up to date.';
+    setStatus(ampStatus, text, online ? 'good' : '');
   }
   ctx.amp?.addEventListener('state', syncAmpBox);
   syncAmpBox();

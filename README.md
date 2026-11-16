@@ -6,7 +6,9 @@ A guitar practice game that listens to your real guitar. Import a tab, line it u
 ## Run it
 
 Open <https://sage-sage.github.io/woodshed/> in Chrome or Edge. Nothing to install.
-For the lowest latency and amp tones, also run **Woodshed Amp** (Settings → Downloads).
+Or install **Woodshed for Windows** (Settings → Downloads → Download Woodshed Setup): the setup wizard lets you
+pick the Woodshed app (the game in its own window, works offline), **Woodshed Amp** (lowest latency and amp tones,
+also works with the website), and the Tab Grabber extension.
 
 1. Plug the guitar into your audio interface and click **Connect guitar**. In **Settings** pick the
    interface and the channel the guitar is on (Input 1 = left, Input 2 = right).

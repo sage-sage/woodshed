@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Install Tab Grabber in Chrome</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #171412;
+      --surface: #211c19;
+      --border: #362e29;
+      --text: #f3ece4;
+      --muted: #b8aba0;
+      --accent: #e6b683;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      padding: 32px 20px;
+      background: var(--bg);
+      color: var(--text);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      line-height: 1.55;
+    }
+    main {
+      max-width: 680px;
+      margin: 0 auto;
+    }
+    h1 {
+      margin: 0 0 8px;
+      font-size: 1.7rem;
+      color: var(--accent);
+      font-weight: 650;
+    }
+    p.lead {
+      margin: 0 0 24px;
+      color: var(--muted);
+    }
+    ol {
+      list-style: none;
+      padding: 0;
+      margin: 0;
+      display: grid;
+      gap: 14px;
+    }
+    li {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      padding: 16px 18px;
+    }
+    .step-title {
+      font-weight: 600;
+      font-size: 1.05rem;
+      margin-bottom: 6px;
+    }
+    .step-num {
+      color: var(--accent);
+      margin-right: 6px;
+    }
+    .code-row {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+      margin-top: 10px;
+      flex-wrap: wrap;
+    }
+    code {
+      background: #120f0e;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      padding: 7px 10px;
+      font-family: Consolas, "Cascadia Code", monospace;
+      font-size: 0.92rem;
+      color: var(--accent);
+      word-break: break-all;
+      flex: 1 1 auto;
+    }
+    button {
+      background: var(--accent);
+      color: #171412;
+      border: none;
+      border-radius: 6px;
+      padding: 7px 12px;
+      font-weight: 600;
+      font-size: 0.88rem;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    button:hover { opacity: 0.92; }
+    .note {
+      margin-top: 20px;
+      padding: 14px 16px;
+      border-left: 3px solid var(--accent);
+      background: var(--surface);
+      border-radius: 0 8px 8px 0;
+      color: var(--muted);
+      font-size: 0.94rem;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Add Tab Grabber to Chrome</h1>
+    <p class="lead">Follow these four quick steps to load the unpacked Tab Grabber extension.</p>
+
+    <ol>
+      <li>
+        <div class="step-title"><span class="step-num">1.</span>Open Chrome's Extensions page</div>
+        <div>Copy <code>chrome://extensions</code> and paste it into your browser's address bar (browsers block direct links to internal settings pages).</div>
+        <div class="code-row">
+          <code id="ext-url">chrome://extensions</code>
+          <button type="button" data-copy="ext-url">Copy URL</button>
+        </div>
+      </li>
+
+      <li>
+        <div class="step-title"><span class="step-num">2.</span>Turn on Developer mode</div>
+        <div>Flip the <strong>Developer mode</strong> switch in the top-right corner of the Extensions page.</div>
+      </li>
+
+      <li>
+        <div class="step-title"><span class="step-num">3.</span>Click Load unpacked</div>
+        <div>Click the <strong>Load unpacked</strong> button that appears in the top-left toolbar.</div>
+      </li>
+
+      <li>
+        <div class="step-title"><span class="step-num">4.</span>Select the Tab Grabber folder</div>
+        <div>Choose the folder where this guide is located:</div>
+        <div class="code-row">
+          <code id="folder-path"></code>
+          <button type="button" data-copy="folder-path">Copy Folder Path</button>
+        </div>
+      </li>
+    </ol>
+
+    <div class="note">
+      Using Microsoft Edge? The steps are identical — open <strong>edge://extensions</strong>, enable <strong>Developer mode</strong>, click <strong>Load unpacked</strong>, and select the same folder above.
+    </div>
+  </main>
+
+  <script>
+    (function () {
+      var href = decodeURIComponent(window.location.href.split(/[?#]/)[0]);
+      var dir = href.replace(/\/[^/]*$/, "");
+      if (dir.indexOf("file:///") === 0) {
+        dir = dir.slice(8);
+      } else if (dir.indexOf("file://") === 0) {
+        dir = "\\\\" + dir.slice(7);
+      }
+      var winPath = dir.replace(/\//g, "\\");
+      document.getElementById("folder-path").textContent = winPath;
+
+      document.querySelectorAll("button[data-copy]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          var target = document.getElementById(btn.getAttribute("data-copy"));
+          if (!target) return;
+          var text = target.textContent;
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(text);
+          } else {
+            var ta = document.createElement("textarea");
+            ta.value = text;
+            document.body.appendChild(ta);
+            ta.select();
+            document.execCommand("copy");
+            document.body.removeChild(ta);
+          }
+          var orig = btn.textContent;
+          btn.textContent = "Copied!";
+          setTimeout(function () { btn.textContent = orig; }, 1500);
+        });
+      });
+    })();
+  </script>
+</body>
+</html>
+

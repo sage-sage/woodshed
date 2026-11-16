@@ -82,4 +82,13 @@ if [ -f src/main.cpp ]; then
   APP_OBJ=($(for f in "${APPONLY_SRC[@]}"; do echo $B/obj/app_$(basename $f .cpp).o; done))
   clang++ -mwindows -o $B/woodshed-amp.exe "${APP_OBJ[@]}" "${NET_OBJ[@]}" "${DSP_OBJ[@]}" $B/obj/pa_*.o $LIBS
 fi
+if [ -f src/desktop/desktop_main.cpp ]; then
+  compile src/desktop/desktop_main.cpp $B/obj/desk_main.o clang++ $CXXFLAGS -Ideps/webview2/include -Wno-unknown-pragmas -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -Wall -Wextra -Wno-unused-parameter
+  WINDRES=$(command -v llvm-windres || command -v windres)
+  if [ ! -f $B/obj/desk_res.o ] || [ src/desktop/woodshed.rc -nt $B/obj/desk_res.o ] || [ src/desktop/woodshed.manifest -nt $B/obj/desk_res.o ] || [ src/desktop/woodshed.ico -nt $B/obj/desk_res.o ]; then
+    "$WINDRES" src/desktop/woodshed.rc -O coff -o $B/obj/desk_res.o
+  fi
+  clang++ -mwindows -o $B/woodshed.exe $B/obj/desk_main.o $B/obj/app_updater.o $B/obj/desk_res.o -static -lole32 -luuid -lshell32 -luser32 -lgdi32 -ladvapi32 -lwinhttp -lbcrypt -lshlwapi
+  [ -f deps/webview2/x64/WebView2Loader.dll ] && cp -f deps/webview2/x64/WebView2Loader.dll $B/
+fi
 ls -la $B/*.exe

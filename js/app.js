@@ -14,6 +14,7 @@ import { mount as mountSync } from './sync-ui.js';
 import { mount as mountSetup } from './setup.js';
 import { runCalibration } from './calibrate.js';
 import { fetchLatest, compareVersions } from './updates.js';
+import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates } from './desktop.js';
 import {
   detectTabLibrary,
   getExtensionVersion,
@@ -805,12 +806,18 @@ function showVersions(container) {
     if (!alive) return;
     const ampLatest = latest?.amp?.version || '';
     const ampHave = amp.state === 'online' ? (amp.serverInfo?.version || '') : '';
-    if (!ampHave) {
-      line('#dl-amp-ver', ampLatest ? `Latest: ${escapeHtml(ampLatest)}` : '');
+    const setupLatest = latest?.setup?.version || '';
+    if (isDesktop) {
+      const newer = setupLatest && compareVersions(setupLatest, desktop.version) > 0;
+      line('#dl-amp-ver', newer
+        ? `This is Woodshed ${escapeHtml(desktop.version)}; ${escapeHtml(setupLatest)} is available.`
+        : `This is Woodshed ${escapeHtml(desktop.version)}${setupLatest ? ': up to date' : ''}.`, newer ? 'warn' : (setupLatest ? 'good' : ''));
+    } else if (!ampHave) {
+      line('#dl-amp-ver', setupLatest || ampLatest ? `Latest: ${escapeHtml(setupLatest || ampLatest)}` : '');
     } else if (ampLatest && compareVersions(ampLatest, ampHave) > 0) {
       const how = compareVersions(ampHave, '1.3.0') >= 0
         ? 'Right-click the amp’s tray icon and choose <b>Update</b>.'
-        : 'This version can’t update itself: download the amp once more, after that it updates on its own.';
+        : 'This version can’t update itself: download Woodshed Setup once, after that it updates on its own.';
       line('#dl-amp-ver', `Running ${escapeHtml(ampHave)}, update ${escapeHtml(ampLatest)} available. ${how}`, 'warn');
     } else if (!ampLatest) {
       line('#dl-amp-ver', `Running ${escapeHtml(ampHave)}.`);
@@ -948,10 +955,11 @@ function mountSettings(container) {
         <h2 style="font-family:var(--font-serif);margin:0 0 14px;">Downloads</h2>
         <div class="dl-grid">
           <div class="dl-item">
-            <div class="dl-head"><strong>Woodshed Amp</strong><span class="chip">Windows</span></div>
-            <p class="dl-desc">Plays your guitar through amp tones with almost no delay over ASIO (your MOTU M2) and feeds Woodshed for scoring. Unzip it and run <code>woodshed-amp.exe</code>.</p>
-            <a class="btn btn-primary" id="dl-amp" href="downloads/woodshed-amp.zip" download="Woodshed Amp.zip">Download Amp</a>
-            
+            <div class="dl-head"><strong>Woodshed for Windows</strong><span class="chip">Windows</span></div>
+            <p class="dl-desc">One installer for the Woodshed app (the game in its own window, works offline) and Woodshed Amp (plays your guitar through amp tones with almost no delay over ASIO, and feeds Woodshed for scoring). Pick what you want during setup.</p>
+            ${isDesktop
+              ? `<button type="button" class="btn btn-primary" id="dl-check-update">Check for updates</button>`
+              : `<a class="btn btn-primary" id="dl-amp" href="${SETUP_URL}">Download Woodshed Setup</a>`}
             <p class="dl-version" id="dl-amp-ver"></p>
           </div>
           <div class="dl-item">
@@ -981,6 +989,7 @@ function mountSettings(container) {
   `;
 
   const stopVersions = showVersions(container);
+  container.querySelector('#dl-check-update')?.addEventListener('click', () => checkDesktopUpdate?.());
 
   const renderBackupStatus = () => {
     const el = container.querySelector('#bk-status');
@@ -1590,6 +1599,8 @@ function wireModalRoot() {
     }
   }, true);
 }
+
+const checkDesktopUpdate = wireDesktopUpdates(toast);
 
 async function boot() {
   wireModalRoot();

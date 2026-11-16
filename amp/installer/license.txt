@@ -1,0 +1,15 @@
+Woodshed Software & Third-Party Notices
+
+Woodshed Amp is free software licensed under the GNU General Public License v3.0
+(GPLv3) because it uses the Steinberg ASIO SDK under its GPLv3 option:
+https://www.gnu.org/licenses/gpl-3.0.html
+
+Complete source code is available at:
+https://github.com/sage-sage/woodshed
+
+Additional components and runtime notices:
+- Woodshed Desktop App bundles alphaTab (Mozilla Public License 2.0 / MPL-2.0)
+  and uses the Microsoft Edge WebView2 Runtime.
+- Neural Amp Modeler Core — MIT License.
+- PortAudio — MIT License.
+

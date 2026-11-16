@@ -121,6 +121,9 @@ bool isOriginAllowed(std::string_view origin, std::span<const std::string> extra
     if (!pagesOriginLower.empty() && lower == pagesOriginLower) {
         return true;
     }
+    if (lower == toLowerAscii(kDesktopOrigin)) {
+        return true;  // the Woodshed desktop app (WebView2 virtual host)
+    }
 
     // Check custom extra origins from origins.txt
     for (const auto& extra : extraOrigins) {

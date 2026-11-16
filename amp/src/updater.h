@@ -9,6 +9,8 @@
 
 namespace wsamp {
 
+inline constexpr UINT kMsgUpdateAvailable = WM_APP + 3, kMsgUpdateNone = WM_APP + 4, kMsgUpdateFailed = WM_APP + 5, kMsgUpdateReady = WM_APP + 6;
+
 struct UpdateInfo {
     std::string version;
     std::string url;
@@ -27,6 +29,7 @@ public:
     void checkAsync(HWND notify, bool manual);
     std::optional<UpdateInfo> available() const;
     void installAsync(HWND notify);
+    static bool installerMode();
     static void cleanupOld();
     std::string lastError() const;
 
