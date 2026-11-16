@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 namespace wsamp {
@@ -53,14 +54,42 @@ TrayApp::~TrayApp() {
     destroy();
 }
 
+// "Open Woodshed": the desktop app when Woodshed Setup installed it next to the amp (it brings its window
+// to the front if it is already open), otherwise the website.
+static void openWoodshed() {
+    wchar_t path[MAX_PATH]{};
+    const DWORD len = GetModuleFileNameW(nullptr, path, MAX_PATH);
+    if (len > 0 && len < MAX_PATH) {
+        std::wstring app(path, len);
+        const size_t slash = app.find_last_of(L"\\/");
+        if (slash != std::wstring::npos) {
+            app = app.substr(0, slash) + L"\\woodshed.exe";
+            const DWORD attrs = GetFileAttributesW(app.c_str());
+            if (attrs != INVALID_FILE_ATTRIBUTES && !(attrs & FILE_ATTRIBUTE_DIRECTORY)) {
+                const std::wstring dir = app.substr(0, slash);
+                if (reinterpret_cast<INT_PTR>(ShellExecuteW(nullptr, L"open", app.c_str(), nullptr, dir.c_str(),
+                                                            SW_SHOWNORMAL)) > 32) {
+                    return;
+                }
+            }
+        }
+    }
+    ShellExecuteW(nullptr, L"open", kSiteUrlW, nullptr, nullptr, SW_SHOWNORMAL);
+}
+
 bool TrayApp::create(HINSTANCE hInstance, UINT alreadyRunningMsg) {
     hInstance_ = hInstance;
     alreadyRunningMsg_ = alreadyRunningMsg;
     taskbarCreatedMsg_ = RegisterWindowMessageW(L"TaskbarCreated");
     quitForUpdateMsg_ = RegisterWindowMessageW(L"WoodshedQuitForUpdate");
 
-    hIcon16_ = createRubyJewelIcon(16);
-    hIcon32_ = createRubyJewelIcon(32);
+    // The Woodshed pick (resource 1, src/amp.rc), at the sizes this screen uses; the drawn jewel is a fallback.
+    hIcon16_ = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXSMICON), GetSystemMetrics(SM_CYSMICON), 0));
+    hIcon32_ = static_cast<HICON>(LoadImageW(hInstance, MAKEINTRESOURCEW(1), IMAGE_ICON,
+                                             GetSystemMetrics(SM_CXICON), GetSystemMetrics(SM_CYICON), 0));
+    if (!hIcon16_) hIcon16_ = createRubyJewelIcon(16);
+    if (!hIcon32_) hIcon32_ = createRubyJewelIcon(32);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -399,7 +428,7 @@ void TrayApp::showContextMenu() {
             updater_.installAsync(hwnd_);
         }
     } else if (chosen == kCmdOpenWoodshed) {
-        ShellExecuteW(nullptr, L"open", kSiteUrlW, nullptr, nullptr, SW_SHOWNORMAL);
+        openWoodshed();
     } else if (chosen == kCmdStartWithWindows) {
         controller_.enqueueSetStartWithWindows(!snap.startWithWindows);
     } else if (chosen == kCmdQuit) {

@@ -1,0 +1,4 @@
+// Woodshed Amp resources: the Woodshed pick icon (tray, Start menu) and a DPI-aware manifest so the
+// tray icon is drawn at the screen's real size instead of a blurry scaled 16 px.
+1 ICON "desktop/woodshed.ico"
+1 RT_MANIFEST "desktop/woodshed.manifest"

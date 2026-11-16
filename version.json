@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T16:48:08-08:00"
+  "updated": "2026-11-15T16:56:34-08:00"
  },
  "setup": {
-  "version": "2.0.2",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.2/Woodshed-Setup.exe",
-  "sha256": "2f14a2a8090fcc0dfb87f0a373083bba83b9826aabc9017c755a61371599aaa2",
-  "notes": "Woodshed 2.0.2: amp presets fold away and open into a fader deck; the Active preset badge follows the amp"
+  "version": "2.0.3",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.3/Woodshed-Setup.exe",
+  "sha256": "356303ee9942f51989d75765c77843a0cb583fea673598e34f975cfb6a41305c",
+  "notes": "Woodshed 2.0.3: Woodshed Amp uses the Woodshed pick as its tray icon; Open Woodshed opens the desktop app when it is installed"
  },
  "amp": {
-  "version": "2.0.2",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.2/woodshed-amp.exe",
-  "sha256": "ce11cdd8844090c1c1f4cf2bf8945e0427fa0e8e580ecaad93944bc236cccbad",
-  "notes": "Woodshed 2.0.2: amp presets fold away and open into a fader deck; the Active preset badge follows the amp"
+  "version": "2.0.3",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.3/woodshed-amp.exe",
+  "sha256": "d242a42b80d90172ce2e45976d91c6dad5c7824d82c0c87e980796dcbfdf19d0",
+  "notes": "Woodshed 2.0.3: Woodshed Amp uses the Woodshed pick as its tray icon; Open Woodshed opens the desktop app when it is installed"
  },
  "extension": {
   "version": "1.2.0",
