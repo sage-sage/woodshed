@@ -14,7 +14,7 @@ import { mount as mountSync } from './sync-ui.js';
 import { mount as mountSetup } from './setup.js';
 import { runCalibration } from './calibrate.js';
 import { fetchLatest, compareVersions } from './updates.js';
-import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates } from './desktop.js';
+import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates, mountTitleBar } from './desktop.js';
 import {
   detectTabLibrary,
   getExtensionVersion,
@@ -1603,6 +1603,7 @@ function wireModalRoot() {
 const checkDesktopUpdate = wireDesktopUpdates(toast);
 
 async function boot() {
+  mountTitleBar();
   wireModalRoot();
   await ensureDemoSong();
   amp.connect();

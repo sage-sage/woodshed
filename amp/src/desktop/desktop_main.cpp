@@ -431,6 +431,9 @@ public:
         if (!hwnd_) {
             return false;
         }
+        // The first WM_NCCALCSIZE during creation has wParam FALSE; force one with TRUE so the caption goes.
+        SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+                     SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 
         WINDOWPLACEMENT wp{};
         if (loadWindowPlacement(wp)) {
@@ -474,6 +477,45 @@ private:
         }
 
         switch (msg) {
+            case WM_NCCALCSIZE: {
+                // Custom title bar: keep Windows' resize borders on the left, right and bottom (and so its
+                // shadow, snapping and rounded corners) but drop the caption; the page draws its own bar.
+                if (wParam == TRUE && useCustomFrame_) {
+                    auto* p = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+                    const LONG top = p->rgrc[0].top;
+                    const LRESULT r = DefWindowProcW(hwnd_, msg, wParam, lParam);
+                    p->rgrc[0].top = top;
+                    if (IsZoomed(hwnd_)) {
+                        // A maximized window hangs its frame off-screen; keep the content on-screen.
+                        const UINT dpi = GetDpiForWindow(hwnd_);
+                        p->rgrc[0].top += GetSystemMetricsForDpi(SM_CYFRAME, dpi) +
+                                          GetSystemMetricsForDpi(SM_CXPADDEDBORDER, dpi);
+                    }
+                    return r;
+                }
+                break;
+            }
+            case WM_NCHITTEST: {
+                // The page covers the client area except a thin strip along the top (see topInset()),
+                // which is the top resize edge.
+                const LRESULT hit = DefWindowProcW(hwnd_, msg, wParam, lParam);
+                if (hit != HTCLIENT || !useCustomFrame_) return hit;
+                POINT pt{GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam)};
+                ScreenToClient(hwnd_, &pt);
+                if (!IsZoomed(hwnd_) && pt.y < topInset()) {
+                    RECT rc{};
+                    GetClientRect(hwnd_, &rc);
+                    const int corner = topInset() * 3;
+                    if (pt.x < corner) return HTTOPLEFT;
+                    if (pt.x >= rc.right - corner) return HTTOPRIGHT;
+                    return HTTOP;
+                }
+                return HTCAPTION;
+            }
+            case WM_ACTIVATE: {
+                sendWindowState(LOWORD(wParam) != WA_INACTIVE);
+                break;
+            }
             case WM_DPICHANGED: {
             const RECT* r = reinterpret_cast<const RECT*>(lParam);
             SetWindowPos(hwnd_, nullptr, r->left, r->top, r->right - r->left, r->bottom - r->top,
@@ -497,11 +539,10 @@ private:
                         controller_->put_IsVisible(FALSE);
                     } else {
                         controller_->put_IsVisible(TRUE);
-                        RECT rc{};
-                        GetClientRect(hwnd_, &rc);
-                        controller_->put_Bounds(rc);
+                        controller_->put_Bounds(webViewBounds());
                     }
                 }
+                sendWindowState(GetActiveWindow() == hwnd_);
                 return 0;
             }
             case WM_MOVE: {
@@ -577,6 +618,29 @@ private:
                 break;
         }
         return DefWindowProcW(hwnd_, msg, wParam, lParam);
+    }
+
+    // Thin strip above the page that acts as the window's top resize edge (none when maximized).
+    int topInset() const {
+        if (!hwnd_ || IsZoomed(hwnd_)) return 0;
+        return MulDiv(4, static_cast<int>(GetDpiForWindow(hwnd_)), 96);
+    }
+
+    RECT webViewBounds() const {
+        RECT rc{};
+        GetClientRect(hwnd_, &rc);
+        if (customTitleBar_) rc.top += topInset();
+        return rc;
+    }
+
+    void sendWindowState(bool active) {
+        if (!webview_ || !customTitleBar_) return;
+        std::wstring script = L"window.woodshedDesktopWindow && window.woodshedDesktopWindow({maximized:";
+        script += IsZoomed(hwnd_) ? L"true" : L"false";
+        script += L",active:";
+        script += active ? L"true" : L"false";
+        script += L"})";
+        webview_->ExecuteScript(script.c_str(), nullptr);
     }
 
     void cleanupWebView() noexcept {
@@ -669,9 +733,7 @@ private:
             return;
         }
 
-        RECT rc{};
-        GetClientRect(hwnd_, &rc);
-        controller_->put_Bounds(rc);
+        controller_->put_Bounds(webViewBounds());
         controller_->put_IsVisible(IsIconic(hwnd_) ? FALSE : TRUE);
 
         ComPtr<ICoreWebView2Settings> settings;
@@ -680,6 +742,18 @@ private:
             settings->put_IsStatusBarEnabled(FALSE);
             settings->put_IsZoomControlEnabled(TRUE);
             settings->put_AreDefaultContextMenusEnabled(TRUE);
+            // Lets the page's title bar drag the window via CSS `app-region: drag`.
+            ComPtr<ICoreWebView2Settings9> settings9;
+            if (SUCCEEDED(settings.as(settings9)) && settings9) {
+                settings9->put_IsNonClientRegionSupportEnabled(TRUE);
+                customTitleBar_ = true;
+            }
+        }
+        if (!customTitleBar_) {
+            // Old WebView2 runtime: the page can't drag the window, so give back Windows' own title bar.
+            useCustomFrame_ = false;
+            SetWindowPos(hwnd_, nullptr, 0, 0, 0, 0,
+                         SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
         }
 
         ComPtr<ICoreWebView2_3> webview3;
@@ -695,7 +769,8 @@ private:
         const std::wstring initScript =
             std::wstring(L"window.woodshedDesktop = Object.freeze({ version: \"") +
             wsamp::kAppVersionW + L"\", ampInstalled: " +
-            (ampInstalled ? L"true" : L"false") + L" });";
+            (ampInstalled ? L"true" : L"false") + L", customTitleBar: " +
+            (customTitleBar_ ? L"true" : L"false") + L" });";
         webview_->AddScriptToExecuteOnDocumentCreated(initScript.c_str(), nullptr);
 
         EventRegistrationToken token{};
@@ -793,6 +868,14 @@ private:
                     updater_.installAsync(hwnd_);
                 } else if (type == L"check-update") {
                     updater_.checkAsync(hwnd_, true);
+                } else if (type == L"win-minimize") {
+                    ShowWindow(hwnd_, SW_MINIMIZE);
+                } else if (type == L"win-maximize") {
+                    ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
+                } else if (type == L"win-close") {
+                    PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+                } else if (type == L"win-state") {
+                    sendWindowState(GetActiveWindow() == hwnd_);
                 }
                 return S_OK;
             });
@@ -803,6 +886,8 @@ private:
 
     std::wstring exeDir_;
     bool enableDevTools_ = false;
+    bool customTitleBar_ = false;
+    bool useCustomFrame_ = true;
     HINSTANCE hInstance_ = nullptr;
     HWND hwnd_ = nullptr;
     HBRUSH bgBrush_ = nullptr;

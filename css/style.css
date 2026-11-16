@@ -1554,3 +1554,59 @@ pre {
     padding: 18px;
   }
 }
+
+/* ---- Desktop app title bar (js/desktop.js mountTitleBar) ---- */
+.titlebar {
+  display: flex;
+  align-items: stretch;
+  height: 34px;
+  background: #171411;
+  border-bottom: 1px solid var(--line);
+  color: var(--fg-muted);
+  font-size: 12px;
+  user-select: none;
+  app-region: drag;
+  -webkit-app-region: drag;
+}
+html.has-titlebar .app-shell { height: calc(100dvh - 35px); }
+.titlebar-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 14px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+.titlebar-title {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--fg);
+  opacity: 0.8;
+}
+.titlebar-controls { display: flex; app-region: no-drag; -webkit-app-region: no-drag; }
+.tb-btn {
+  width: 46px;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--fg);
+  display: grid;
+  place-items: center;
+  cursor: default;
+}
+.tb-btn svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1; shape-rendering: crispEdges; }
+.tb-btn:hover { background: rgba(255, 255, 255, 0.08); }
+.tb-btn:active { background: rgba(255, 255, 255, 0.04); }
+.tb-close:hover { background: #c42b1c; color: #fff; }
+.tb-close:active { background: #a52619; color: #fff; }
+.tb-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.tb-restore, html.win-maximized .tb-max { display: none; }
+html.win-maximized .tb-restore { display: block; }
+html.win-inactive .titlebar-brand, html.win-inactive .titlebar-title, html.win-inactive .tb-btn { opacity: 0.5; }
+html.win-inactive .tb-btn:hover { opacity: 1; }

@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-15T15:56:22-08:00"
+  "updated": "2026-11-15T16:15:46-08:00"
  },
  "setup": {
-  "version": "2.0.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.0/Woodshed-Setup.exe",
-  "sha256": "d628e5bb43659ec5b12b76e568b2a58a846ef47e4d1b577c6c69a4160b384db3",
-  "notes": "Woodshed for Windows: desktop app (works offline) and a setup wizard to pick the app, Woodshed Amp and Tab Grabber"
+  "version": "2.0.1",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.1/Woodshed-Setup.exe",
+  "sha256": "687b6054b735e8ad80c221acff4bdfc2224520a5f08071fee379390205cb87a0",
+  "notes": "Woodshed 2.0.1: custom title bar in the desktop app"
  },
  "amp": {
-  "version": "2.0.0",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.0/woodshed-amp.exe",
-  "sha256": "bc89b1c686279b45228e611e4b00b0578fac56634f617be951aacdb921342bd4",
-  "notes": "Woodshed for Windows: desktop app (works offline) and a setup wizard to pick the app, Woodshed Amp and Tab Grabber"
+  "version": "2.0.1",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.0.1/woodshed-amp.exe",
+  "sha256": "540d9f6b35feac409f312abe0f1a916fa05990f67c3e749b489056a461c386a8",
+  "notes": "Woodshed 2.0.1: custom title bar in the desktop app"
  },
  "extension": {
   "version": "1.2.0",
