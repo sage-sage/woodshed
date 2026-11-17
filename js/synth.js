@@ -210,7 +210,9 @@ export class GuitarSynth {
   setTone(id) {
     const requestedId = TONE_PRESETS[id] ? id : 'clean';
     this._requestedToneId = requestedId;
-    const resolvedId = this.isAmpRouted ? 'clean' : requestedId;
+    // Routed through Woodshed Amp the guide is mixed in after the player's amp (clean), so it keeps the song's
+    // own recorded tone; the page's simulated tone chain is skipped either way when routed.
+    const resolvedId = requestedId;
     const cfg = TONE_PRESETS[resolvedId];
     this.toneId = resolvedId;
 

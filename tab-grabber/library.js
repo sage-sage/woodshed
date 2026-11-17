@@ -1,5 +1,6 @@
 import {
   listEntries,
+  getEntry,
   updateEntry,
   deleteEntry,
   exportLibrary,
@@ -269,6 +270,8 @@ sortSelect.addEventListener('change', renderList);
 detailSendBtn.addEventListener('click', async () => {
   const entry = allEntries.find((item) => item.id === selectedId);
   if (!entry) return;
+  // The list leaves out each tab's Songsterr notation (exact rhythm + video timings); fetch the full entry for it.
+  const full = await getEntry(entry.id).catch(() => null);
   await sendToWoodshed({
     title: detailTitleInput.value.trim(),
     artist: detailArtistInput.value.trim(),
@@ -276,6 +279,7 @@ detailSendBtn.addEventListener('click', async () => {
     capo: entry.capo ?? 0,
     bpm: entry.bpm ?? null,
     text: entry.text || '',
+    ...(full?.notation ? { notation: full.notation } : {}),
     source: entry.site || 'library',
     url: entry.url || ''
   });

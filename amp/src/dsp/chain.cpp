@@ -175,16 +175,17 @@ void Chain::processChunk(float* io, int n, Board* board, const float* addAfterGa
     // 2. Noise gate (keyed on INPUT)
     gate_.process(io, n);
 
-    // 2b. Optional guide signal mixed after trim + gate, before the pedalboard
+    // 3. Pedalboard
+    if (board != nullptr) {
+        board->process(io, n);
+    }
+
+    // 3b. Optional guide guitar, mixed in clean AFTER the pedalboard (the guide is a recorded guitar sample;
+    // running it through the player's amp model made it sound mangled). It still gets the output level/limiter.
     if (addAfterGate != nullptr) {
         for (int i = 0; i < n; ++i) {
             io[i] += addAfterGate[i];
         }
-    }
-
-    // 3. Pedalboard
-    if (board != nullptr) {
-        board->process(io, n);
     }
 
     // 4. Output level + soft limiter

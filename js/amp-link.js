@@ -476,6 +476,8 @@ export class AmpLink extends EventTarget {
     } else if (msg.type === 'nodeAdded' || msg.type === 'presetCreated' || msg.type === 'presetExportData') {
       // Replies to this page's own requests (Woodshed Amp 2.2+ pedalboard), matched by requestId.
       this._emit(msg.type, msg);
+    } else if (msg.type === 'tabImport' && msg.payload && typeof msg.payload === 'object') {
+      this._emit('tabImport', msg.payload);
     } else if (msg.type === 'devices') {
       this.devices = {
         current: typeof msg.current === 'string' ? msg.current : (msg.current ?? null),

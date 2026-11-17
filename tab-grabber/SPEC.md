@@ -11,7 +11,9 @@ video-points list `/api/video-points/<songId>/<revisionId>/list`, the per-bar Yo
 song already synced, approved by the user on 2026-11-16 knowing Songsterr sells uninterrupted video sync in its Plus
 plan; the user asked that this not be advertised in the UI), never bypasses login or paywalls (Ultimate Guitar "Pro"/"Official" tabs that are
 locked stay locked: show "This tab isn't available as text on this page"), never runs on pages until the user clicks
-the extension (activeTab + scripting), and sends nothing anywhere except to the Woodshed tab the user chose.
+the extension (activeTab + scripting), and sends nothing anywhere except to the Woodshed tab the user chose, or, when no Woodshed tab is open, to Woodshed Amp on
+this computer (ws://127.0.0.1:47800), which hands the tab only to the open Woodshed desktop app (the amp accepts extension
+connections only for this one message; added 2026-11-16 at the user's request).
 
 ## Files (Manifest V3, no build step, no libraries)
 ```

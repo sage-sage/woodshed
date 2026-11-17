@@ -110,6 +110,17 @@ bool containsHeaderTokenCI(std::string_view headerVal, std::string_view token) {
 } // namespace
 
 
+bool isChromeExtensionOrigin(std::string_view lowerOrigin) {
+    constexpr std::string_view kPrefix = "chrome-extension://";
+    if (lowerOrigin.size() != kPrefix.size() + 32) return false;
+    if (!lowerOrigin.starts_with(kPrefix)) return false;
+    for (size_t i = kPrefix.size(); i < lowerOrigin.size(); ++i) {
+        const char ch = lowerOrigin[i];
+        if (ch < 'a' || ch > 'p') return false;
+    }
+    return true;
+}
+
 bool isOriginAllowed(std::string_view origin, std::span<const std::string> extraOrigins) {
     const std::string trimmed = trimAscii(origin);
     if (trimmed.empty()) return false;
@@ -594,11 +605,38 @@ void WsServer::sendTextToClient(uint32_t clientId, std::string_view jsonText) {
     wakeSelect();
 }
 
+size_t WsServer::sendTextToOrigin(std::string_view origin, std::string_view jsonText) {
+    const std::string targetOrigin = toLowerAscii(trimAscii(origin));
+    if (targetOrigin.empty()) return 0;
+
+    std::lock_guard<std::mutex> lock(clientsMutex_);
+    const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(jsonText.data()), jsonText.size());
+    size_t count = 0;
+    for (auto& c : clients_) {
+        if (c.upgraded && !c.closing && !c.restricted && c.origin == targetOrigin) {
+            enqueueFrameLocked(c, WsOpcode::Text, bytes, false);
+            ++count;
+        }
+    }
+    wakeSelect();
+    return count;
+}
+
+bool WsServer::isRestrictedClient(uint32_t clientId) const {
+    std::lock_guard<std::mutex> lock(const_cast<std::mutex&>(clientsMutex_));
+    for (const auto& c : clients_) {
+        if (c.id == clientId) {
+            return c.restricted;
+        }
+    }
+    return false;
+}
+
 void WsServer::broadcastText(std::string_view jsonText) {
     std::lock_guard<std::mutex> lock(clientsMutex_);
     const std::span<const uint8_t> bytes(reinterpret_cast<const uint8_t*>(jsonText.data()), jsonText.size());
     for (auto& c : clients_) {
-        if (c.upgraded && !c.closing) {
+        if (c.upgraded && !c.closing && !c.restricted) {
             enqueueFrameLocked(c, WsOpcode::Text, bytes, false);
         }
     }
@@ -608,7 +646,7 @@ void WsServer::broadcastText(std::string_view jsonText) {
 void WsServer::broadcastAudioFrame(std::span<const uint8_t> wsa1Payload) {
     std::lock_guard<std::mutex> lock(clientsMutex_);
     for (auto& c : clients_) {
-        if (c.upgraded && !c.closing && c.streaming) {
+        if (c.upgraded && !c.closing && !c.restricted && c.streaming) {
             enqueueFrameLocked(c, WsOpcode::Binary, wsa1Payload, true);
         }
     }
@@ -619,6 +657,7 @@ void WsServer::setClientStreaming(uint32_t clientId, bool on) {
     std::lock_guard<std::mutex> lock(clientsMutex_);
     for (auto& c : clients_) {
         if (c.id == clientId) {
+            if (c.restricted) return;
             c.streaming = on;
             break;
         }
@@ -630,7 +669,7 @@ void WsServer::updateAtomicCounts() {
     size_t connected = 0;
     size_t streaming = 0;
     for (const auto& c : clients_) {
-        if (c.upgraded && !c.closing) {
+        if (c.upgraded && !c.closing && !c.restricted) {
             ++connected;
             if (c.streaming) ++streaming;
         }
@@ -657,7 +696,8 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
         const int n = recv(static_cast<SOCKET>(c.sock), tmp, sizeof(tmp), 0);
         if (n > 0) {
             c.recvBuf.append(tmp, static_cast<size_t>(n));
-            if (c.recvBuf.size() > 128 * 1024) {
+            // Extension clients may send one large tabImport (Songsterr notation); everyone else stays small.
+            if (c.recvBuf.size() > (c.restricted ? kMaxTabImportBytes + 1024 : 128 * 1024)) {
                 closeClient(c, disconnectedIds);
                 return;
             }
@@ -695,7 +735,9 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
 
         c.recvBuf.erase(0, consumed);
 
-        if (!isOriginAllowed(req.origin, extraOrigins_)) {
+        const std::string lowerOrigin = toLowerAscii(trimAscii(req.origin));
+        const bool isExtension = isChromeExtensionOrigin(lowerOrigin);
+        if (!isExtension && !isOriginAllowed(req.origin, extraOrigins_)) {
             const std::string forbidden = buildHttpForbiddenResponse();
             std::vector<uint8_t> raw(forbidden.begin(), forbidden.end());
             c.queuedBytes += raw.size();
@@ -703,6 +745,9 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
             c.closing = true;
             return;
         }
+
+        c.origin = lowerOrigin;
+        c.restricted = isExtension;
 
         const std::string okResp = buildHttpUpgradeResponse(req.secWebSocketKey);
         std::vector<uint8_t> raw(okResp.begin(), okResp.end());
@@ -717,9 +762,10 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
     while (c.upgraded && !c.closing && !c.recvBuf.empty()) {
         WsFrame frame;
         size_t consumed = 0;
+        const size_t maxPayloadBytes = c.restricted ? kMaxTabImportBytes : kMaxReassembledBytes;
         const std::span<const uint8_t> view(
             reinterpret_cast<const uint8_t*>(c.recvBuf.data()), c.recvBuf.size());
-        const WsDecodeStatus dec = decodeWsFrame(view, frame, consumed, kMaxReassembledBytes);
+        const WsDecodeStatus dec = decodeWsFrame(view, frame, consumed, maxPayloadBytes);
 
         if (dec == WsDecodeStatus::Incomplete) {
             break;
@@ -745,7 +791,7 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
             break;
         }
 
-        // Data frames & fragmentation up to 64 KB
+        // Data frames & fragmentation up to per-client limit
         if (frame.opcode == WsOpcode::Text || frame.opcode == WsOpcode::Binary) {
             if (c.assemblingFragment) {
                 closeClient(c, disconnectedIds);
@@ -763,7 +809,7 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
                 c.assemblingFragment = true;
                 c.fragmentOpcode = frame.opcode;
                 c.fragmentBuf = std::move(frame.payload);
-                if (c.fragmentBuf.size() > kMaxReassembledBytes) {
+                if (c.fragmentBuf.size() > maxPayloadBytes) {
                     closeClient(c, disconnectedIds);
                     return;
                 }
@@ -773,7 +819,7 @@ void WsServer::handleClientReadable(ClientConn& c, std::vector<uint32_t>& discon
                 closeClient(c, disconnectedIds);
                 return;
             }
-            if (c.fragmentBuf.size() + frame.payload.size() > kMaxReassembledBytes) {
+            if (c.fragmentBuf.size() + frame.payload.size() > maxPayloadBytes) {
                 closeClient(c, disconnectedIds);
                 return;
             }

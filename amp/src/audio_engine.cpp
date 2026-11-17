@@ -725,6 +725,9 @@ void AudioEngine::fillGuideChunk(int chunk) noexcept {
         guideResamplerPos_ = 0.0;
         guideS0_ = 0.0f;
         guideS1_ = 0.0f;
+        guideLast_ = 0.0f;
+        guideDrift_ = 0.0;
+        guideFadeIn_ = 0;
         guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
         seenGuideFlushSeq_ = flushSeq;
     }
@@ -745,10 +748,18 @@ void AudioEngine::fillGuideChunk(int chunk) noexcept {
     const size_t maxSamples = targetSamples +
         static_cast<size_t>(std::llround((kGuideMaxExcessMs / 1000.0) * guideRate));
 
+    // On a gap, glide the last sample to silence instead of cutting (a cut is a click).
+    auto fadeOutFrom = [&](int start) {
+        for (int j = start; j < chunk; ++j) {
+            guideLast_ *= 0.94f;
+            guideBuf_[j] = guideLast_;
+        }
+    };
+
     size_t avail = guideRing_.size();
     if (!guidePrimed_) {
         if (avail < targetSamples) {
-            std::memset(guideBuf_.data(), 0, static_cast<size_t>(chunk) * sizeof(float));
+            fadeOutFrom(0);
             guideBufferedMs_.store(
                 static_cast<float>((static_cast<double>(avail) / guideRate) * 1000.0),
                 std::memory_order_relaxed);
@@ -757,9 +768,10 @@ void AudioEngine::fillGuideChunk(int chunk) noexcept {
         guidePrimed_ = true;
         guideHasPrev_ = false;
         guideResamplerPos_ = 0.0;
+        guideFadeIn_ = 0;
     }
 
-    // Trim excess buffered audio on burst/clock drift down to jitter target
+    // A big burst (the page stalled, then caught up): drop back to the target, then fade back in.
     if (avail > maxSamples) {
         size_t toDrop = avail - targetSamples;
         float discard[256];
@@ -769,32 +781,38 @@ void AudioEngine::fillGuideChunk(int chunk) noexcept {
             if (popped == 0) break;
             toDrop -= popped;
         }
+        avail = guideRing_.size();
         guideHasPrev_ = false;
         guideResamplerPos_ = 0.0;
+        guideFadeIn_ = 0;
     }
 
-    const bool sameRate = (std::abs(guideRate - deviceRate) < 1.0);
-    if (sameRate) {
-        guideHasPrev_ = false;
-        guideResamplerPos_ = 0.0;
+    // The page's audio clock and the interface's clock never run at exactly the same speed. Instead of
+    // letting the buffer drain (gap) or overflow (skip), play the guide fractionally faster or slower to hold
+    // it at the target: +25 ms of extra buffer -> about 0.1% faster, never more than 0.3% (inaudible).
+    const double errMs = (static_cast<double>(avail) - static_cast<double>(targetSamples)) / guideRate * 1000.0;
+    const double wantDrift = std::clamp(errMs * 0.00004, -0.003, 0.003);
+    guideDrift_ += 0.02 * (wantDrift - guideDrift_);
+    const double ratio = (guideRate / deviceRate) * (1.0 + guideDrift_);
 
-        const size_t popped = guideRing_.popBatch(guideBuf_.data(), static_cast<size_t>(chunk));
-        for (size_t i = 0; i < popped; ++i) {
-            guideBuf_[i] *= gain;
-        }
-        if (popped < static_cast<size_t>(chunk)) {
-            std::memset(guideBuf_.data() + popped, 0,
-                        (static_cast<size_t>(chunk) - popped) * sizeof(float));
+    if (!guideHasPrev_) {
+        if (!guideRing_.tryPop(guideS0_) || !guideRing_.tryPop(guideS1_)) {
+            fadeOutFrom(0);
             guideUnderruns_.fetch_add(1, std::memory_order_relaxed);
             guidePrimed_ = false;
             guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
             return;
         }
-    } else {
-        const double ratio = guideRate / deviceRate;
-        if (!guideHasPrev_) {
-            if (!guideRing_.tryPop(guideS0_) || !guideRing_.tryPop(guideS1_)) {
-                std::memset(guideBuf_.data(), 0, static_cast<size_t>(chunk) * sizeof(float));
+        guideHasPrev_ = true;
+        guideResamplerPos_ = 0.0;
+    }
+
+    for (int i = 0; i < chunk; ++i) {
+        while (guideResamplerPos_ >= 1.0) {
+            guideS0_ = guideS1_;
+            float nextSample = 0.0f;
+            if (!guideRing_.tryPop(nextSample)) {
+                fadeOutFrom(i);
                 guideUnderruns_.fetch_add(1, std::memory_order_relaxed);
                 guidePrimed_ = false;
                 guideHasPrev_ = false;
@@ -802,32 +820,19 @@ void AudioEngine::fillGuideChunk(int chunk) noexcept {
                 guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
                 return;
             }
-            guideHasPrev_ = true;
-            guideResamplerPos_ = 0.0;
+            guideS1_ = nextSample;
+            guideResamplerPos_ -= 1.0;
         }
 
-        for (int i = 0; i < chunk; ++i) {
-            while (guideResamplerPos_ >= 1.0) {
-                guideS0_ = guideS1_;
-                float nextSample = 0.0f;
-                if (!guideRing_.tryPop(nextSample)) {
-                    std::memset(guideBuf_.data() + i, 0,
-                                static_cast<size_t>(chunk - i) * sizeof(float));
-                    guideUnderruns_.fetch_add(1, std::memory_order_relaxed);
-                    guidePrimed_ = false;
-                    guideHasPrev_ = false;
-                    guideResamplerPos_ = 0.0;
-                    guideBufferedMs_.store(0.0f, std::memory_order_relaxed);
-                    return;
-                }
-                guideS1_ = nextSample;
-                guideResamplerPos_ -= 1.0;
-            }
-
-            const float frac = static_cast<float>(guideResamplerPos_);
-            guideBuf_[i] = (guideS0_ + (guideS1_ - guideS0_) * frac) * gain;
-            guideResamplerPos_ += ratio;
+        const float frac = static_cast<float>(guideResamplerPos_);
+        float v = (guideS0_ + (guideS1_ - guideS0_) * frac) * gain;
+        if (guideFadeIn_ < kGuideFadeSamples) {
+            v *= static_cast<float>(guideFadeIn_) / static_cast<float>(kGuideFadeSamples);
+            ++guideFadeIn_;
         }
+        guideBuf_[i] = v;
+        guideLast_ = v;
+        guideResamplerPos_ += ratio;
     }
 
     const size_t rem = guideRing_.size();

@@ -12,6 +12,67 @@ function buildImportUrl(baseUrl) {
   return `${cleanBase}#/import`;
 }
 
+async function sendViaAmp(payload, timeoutMs = 2500) {
+  return new Promise((resolve) => {
+    if (typeof WebSocket === 'undefined') {
+      resolve(0);
+      return;
+    }
+    let ws;
+    let settled = false;
+    let timer = null;
+
+    const finish = (delivered) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== null) clearTimeout(timer);
+      try {
+        if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+          ws.close();
+        }
+      } catch (_err) {
+        // ignore close errors
+      }
+      resolve(delivered);
+    };
+
+    try {
+      ws = new WebSocket('ws://127.0.0.1:47800/ws');
+    } catch (_err) {
+      finish(0);
+      return;
+    }
+
+    timer = setTimeout(() => finish(0), timeoutMs);
+
+    ws.addEventListener('open', () => {
+      try {
+        ws.send(JSON.stringify({ type: 'tabImport', payload }));
+      } catch (_err) {
+        finish(0);
+      }
+    });
+
+    ws.addEventListener('message', (event) => {
+      try {
+        if (typeof event.data !== 'string') return;
+        const msg = JSON.parse(event.data);
+        if (msg && msg.type === 'tabImportAck') {
+          const n = typeof msg.delivered === 'number' && Number.isFinite(msg.delivered) ? msg.delivered : 0;
+          finish(n > 0 ? n : 0);
+        } else if (msg && msg.type === 'error') {
+          finish(0);
+        }
+      } catch (_err) {
+        // ignore malformed frames
+      }
+    });
+
+    ws.addEventListener('error', () => finish(0));
+    ws.addEventListener('close', () => finish(0));
+  });
+}
+
 export async function sendToWoodshed(payload) {
   const importPayload = {
     v: 1,
@@ -74,6 +135,11 @@ export async function sendToWoodshed(payload) {
       await chrome.tabs.reload(matchedTab.id);
     }
   } else {
+    const delivered = await sendViaAmp(importPayload);
+    if (delivered > 0) {
+      await chrome.storage.local.remove('pendingImport');
+      return { via: 'app', delivered };
+    }
     await chrome.tabs.create({
       url: buildImportUrl(primaryBase)
     });

@@ -117,6 +117,14 @@ window.addEventListener('message', (event) => {
   acceptTabImport(data.payload, { ack: true });
 });
 
+amp.addEventListener('tabImport', (e) => {
+  if (!isDesktop) return;  // only the desktop app takes tabs relayed by the amp
+  const p = e.detail && typeof e.detail === 'object' ? { ...e.detail } : null;
+  if (!p) return;
+  if (typeof p.ts !== 'number' || !Number.isFinite(p.ts)) p.ts = Date.now();
+  if (acceptTabImport(p) !== false) postToHost({ type: 'win-focus' });
+});
+
 function toast(msg, kind = 'info', opts = {}) {
   const region = document.getElementById('toast-region');
   if (!region) return;
@@ -990,7 +998,7 @@ function mountSettings(container) {
             <label for="set-guide-amp" style="margin:0;">Play the guide through Woodshed Amp (your preset)</label>
             <input type="checkbox" id="set-guide-amp" ${settings.get('guideThroughAmp') !== false ? 'checked' : ''} ${amp.state === 'online' && amp.supportsGuide ? '' : 'disabled'} />
           </div>
-          <div id="set-guide-amp-hint" style="font-size:12px;color:var(--text-dim, #9aa4b2);margin-top:4px;">${amp.state !== 'online' ? 'Woodshed Amp is offline — when the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.' : (!amp.supportsGuide ? 'Update Woodshed Amp to support guide routing — when a compatible amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.' : 'When the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.')}</div>
+          <div id="set-guide-amp-hint" style="font-size:12px;color:var(--text-dim, #9aa4b2);margin-top:4px;">${amp.state !== 'online' ? 'Woodshed Amp is offline — when the amp is connected, the guide plays through your audio interface, mixed in clean alongside your sound; otherwise it plays here.' : (!amp.supportsGuide ? 'Update Woodshed Amp to support guide routing — when a compatible amp is connected, the guide plays through your audio interface, mixed in clean alongside your sound; otherwise it plays here.' : 'When the amp is connected, the guide plays through your audio interface, mixed in clean alongside your sound; otherwise it plays here.')}</div>
         </div>
       </section>
 
@@ -1248,11 +1256,11 @@ function mountSettings(container) {
       guideAmpCheck.disabled = !available;
       if (guideAmpHint) {
         if (amp.state !== 'online') {
-          guideAmpHint.textContent = 'Woodshed Amp is offline — when the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.';
+          guideAmpHint.textContent = 'Woodshed Amp is offline — when the amp is connected, the guide plays through your audio interface, mixed in clean alongside your sound; otherwise it plays here.';
         } else if (!amp.supportsGuide) {
-          guideAmpHint.textContent = 'Update Woodshed Amp to support guide routing — when a compatible amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.';
+          guideAmpHint.textContent = 'Update Woodshed Amp to support guide routing — when a compatible amp is connected, the guide plays through your audio interface, mixed in clean alongside your sound; otherwise it plays here.';
         } else {
-          guideAmpHint.textContent = 'When the amp is connected, the guide is sent to it and played through the active preset; otherwise it plays here.';
+          guideAmpHint.textContent = 'When the amp is connected, the guide plays through your audio interface, mixed in clean alongside your sound; otherwise it plays here.';
         }
       }
     };

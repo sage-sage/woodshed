@@ -899,6 +899,17 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
 
     const std::string type = msg["type"].get<std::string>();
 
+    if (wsServer_.isRestrictedClient(clientId)) {
+        if (type != "tabImport" || !msg.contains("payload") || !msg["payload"].is_object()) {
+            wsServer_.sendTextToClient(clientId, buildErrorJson("Only tabImport is allowed from this client"));
+            return;
+        }
+        json out = { {"type", "tabImport"}, {"payload", msg["payload"]} };
+        const size_t n = wsServer_.sendTextToOrigin(kDesktopOrigin, out.dump());
+        wsServer_.sendTextToClient(clientId, json{ {"type", "tabImportAck"}, {"delivered", n} }.dump());
+        return;
+    }
+
     if (type == "hello") {
         wsServer_.sendTextToClient(clientId, buildHelloJson());
         wsServer_.sendTextToClient(clientId, buildPresetsJson());

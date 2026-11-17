@@ -14,7 +14,7 @@ A Manifest V3 Chrome extension that grabs ASCII guitar tabs from the active brow
 1. Open a song tab page in Chrome (or highlight ≥ 3 lines of tab text on any page).
 2. Click the **Woodshed Tab Grabber** toolbar icon or press **Alt+Shift+W**.
 3. Review or edit the detected title, artist, tuning, capo, and BPM in the popup.
-4. Click **Send to Woodshed** to focus or open Woodshed (the GitHub Pages site by default) and load the tab into **Paste Text Tab**, click **Save to Library** to keep it in your local Tab Library, or use **Copy** / **Save .txt**.
+4. Click **Send to Woodshed** to focus or open Woodshed (the GitHub Pages site by default; if no Woodshed tab is open but the Woodshed desktop app is running, the tab goes straight to the app) and load the tab into **Paste Text Tab**, click **Save to Library** to keep it in your local Tab Library, or use **Copy** / **Save .txt**.
 
 To change the Woodshed URL or enable checking a hosted copy, click **Settings** in the popup or open the extension's **Options** page.
 

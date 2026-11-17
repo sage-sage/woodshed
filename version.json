@@ -1,21 +1,21 @@
 {
  "site": {
-  "updated": "2026-11-16T16:17:59-08:00"
+  "updated": "2026-11-16T16:24:52-08:00"
  },
  "setup": {
-  "version": "2.5.2",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.2/Woodshed-Setup.exe",
-  "sha256": "fd652bcae3106644f33a73ebc323914153b718d180b3f06be5ba58640e890e61",
-  "notes": "Woodshed 2.5.2: the sync timeline shows the tab under the waveform; fixes crackle/static through Woodshed Amp (denormal flush on the audio thread)"
+  "version": "2.5.3",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.3/Woodshed-Setup.exe",
+  "sha256": "d3bcc2df8b9ec51d4685ddf949e624216c6558236939697633b6127e09a587da",
+  "notes": "Woodshed 2.5.3: the guide guitar plays clean after your amp (no more distortion on it) in the song's recorded tone, without the crackle (deeper buffer, clock-drift correction, fades instead of cuts); Tab Grabber 1.5.0 sends tabs straight to the desktop app when no Woodshed tab is open; Saved Tabs keep their exact rhythm and videos"
  },
  "amp": {
-  "version": "2.5.2",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.2/woodshed-amp.exe",
-  "sha256": "43873b58b21539d95fb7abd376e811c4933638bb7895839bd32bb3f09c619e0f",
-  "notes": "Woodshed 2.5.2: the sync timeline shows the tab under the waveform; fixes crackle/static through Woodshed Amp (denormal flush on the audio thread)"
+  "version": "2.5.3",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.3/woodshed-amp.exe",
+  "sha256": "4e2dc3629a2d6e0101617962dc96b0f9c3fcbfb5b63a434b09e13ba393b0174f",
+  "notes": "Woodshed 2.5.3: the guide guitar plays clean after your amp (no more distortion on it) in the song's recorded tone, without the crackle (deeper buffer, clock-drift correction, fades instead of cuts); Tab Grabber 1.5.0 sends tabs straight to the desktop app when no Woodshed tab is open; Saved Tabs keep their exact rhythm and videos"
  },
  "extension": {
-  "version": "1.4.0",
+  "version": "1.5.0",
   "url": "downloads/woodshed-tab-grabber.zip"
  }
 }

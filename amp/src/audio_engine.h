@@ -52,8 +52,9 @@ public:
     static constexpr size_t kDryRingCapacity = 32768;
     static constexpr size_t kMonitorRingCapacity = 16384;
     static constexpr size_t kGuideRingCapacity = 131072; // >1 s at 96 kHz (power of two)
-    static constexpr double kGuideTargetMs = 30.0;
-    static constexpr double kGuideMaxExcessMs = 120.0;
+    static constexpr double kGuideTargetMs = 150.0;  // deep enough to ride out page/main-thread stalls (notes are scheduled this much early)
+    static constexpr double kGuideMaxExcessMs = 200.0;
+    static constexpr int kGuideFadeSamples = 96;
 
     AudioEngine();
     ~AudioEngine();
@@ -216,6 +217,9 @@ private:
     double guideResamplerPos_ = 0.0;
     float guideS0_ = 0.0f;
     float guideS1_ = 0.0f;
+    float guideLast_ = 0.0f;   // last guide sample out, faded to silence on a gap
+    double guideDrift_ = 0.0;  // playback-rate trim that keeps the guide buffer at its target
+    int guideFadeIn_ = 0;
     std::vector<float> guideBuf_;
     SpscRing<float, kGuideRingCapacity> guideRing_;
 };

@@ -103,6 +103,7 @@ public:
     static constexpr uint16_t kDefaultPort = 47800;
     static constexpr size_t kMaxClients = 4;
     static constexpr size_t kMaxReassembledBytes = 65536;
+    static constexpr size_t kMaxTabImportBytes = 8 * 1024 * 1024;
     static constexpr size_t kMaxSendQueueBytes = 256 * 1024;
 
     explicit WsServer(IWsMessageHandler& handler, uint16_t port = kDefaultPort);
@@ -116,9 +117,11 @@ public:
 
     // Thread-safe outbound messaging (callable from AppController thread)
     void sendTextToClient(uint32_t clientId, std::string_view jsonText);
+    size_t sendTextToOrigin(std::string_view origin, std::string_view jsonText);
     void broadcastText(std::string_view jsonText);
     void broadcastAudioFrame(std::span<const uint8_t> wsa1Payload);
     void setClientStreaming(uint32_t clientId, bool on);
+    bool isRestrictedClient(uint32_t clientId) const;
 
     bool hasStreamingClients() const noexcept {
         return streamingClientCount_.load(std::memory_order_acquire) > 0;
@@ -138,8 +141,10 @@ private:
         uintptr_t sock = ~static_cast<uintptr_t>(0);
         uint32_t id = 0;
         bool upgraded = false;
+        bool restricted = false;
         bool streaming = false;
         bool closing = false;
+        std::string origin;
 
         std::string recvBuf;
         bool assemblingFragment = false;

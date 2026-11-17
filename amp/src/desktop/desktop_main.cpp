@@ -874,6 +874,13 @@ private:
                     ShowWindow(hwnd_, IsZoomed(hwnd_) ? SW_RESTORE : SW_MAXIMIZE);
                 } else if (type == L"win-close") {
                     PostMessageW(hwnd_, WM_CLOSE, 0, 0);
+                } else if (type == L"win-focus") {
+                    // A tab arrived from the browser extension: bring the window forward
+                    // (Windows may only flash the taskbar button if another app has focus).
+                    if (IsIconic(hwnd_)) ShowWindow(hwnd_, SW_RESTORE);
+                    SetForegroundWindow(hwnd_);
+                    FLASHWINFO fi{ sizeof(FLASHWINFO), hwnd_, FLASHW_TRAY | FLASHW_TIMERNOFG, 3, 0 };
+                    if (GetForegroundWindow() != hwnd_) FlashWindowEx(&fi);
                 } else if (type == L"win-state") {
                     sendWindowState(GetActiveWindow() == hwnd_);
                 }
