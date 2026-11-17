@@ -917,7 +917,7 @@ export function mount(container, ctx) {
       const rect = canvas.getBoundingClientRect();
       const dpr = globalThis.devicePixelRatio || 1;
       const w = Math.max(300, Math.floor(rect.width || 800));
-      const h = Math.max(150, Math.floor(rect.height || 195));
+      const h = Math.max(220, Math.floor(rect.height || 270));
       if (canvas.width !== Math.floor(w * dpr) || canvas.height !== Math.floor(h * dpr)) {
         canvas.width = Math.floor(w * dpr);
         canvas.height = Math.floor(h * dpr);
@@ -967,11 +967,51 @@ export function mount(container, ctx) {
         c.fillText(`${s}s`, x + 3, 13);
       }
 
-      // 2. Waveform (if decoded)
+      // Tab lane along the bottom: one line per string (highest on top), fret numbers where each note maps to now.
+      const nStr = Array.isArray(song.tuning) && song.tuning.length ? song.tuning.length : 6;
+      const rowH = 11;
+      const tabH = nStr * rowH + 12;
+      const tabTop = h - tabH;
+      c.fillStyle = 'rgba(0, 0, 0, 0.22)';
+      c.fillRect(0, tabTop, w, tabH);
+      c.strokeStyle = 'rgba(241, 231, 208, 0.18)';
+      c.lineWidth = 1;
+      for (let si = 0; si < nStr; si++) {
+        const y = Math.round(tabTop + 6 + si * rowH + rowH / 2) + 0.5;
+        c.beginPath();
+        c.moveTo(0, y);
+        c.lineTo(w, y);
+        c.stroke();
+      }
+      const tabLo = audioToTab(sync, viewStartSec) - 0.5;
+      const tabHi = audioToTab(sync, viewStartSec + spanSec) + 0.5;
+      const cream = getComputedStyle(document.documentElement).getPropertyValue('--screen-cream').trim() || '#f1e7d0';
+      const screenBg = getComputedStyle(document.documentElement).getPropertyValue('--screen').trim() || '#101113';
+      c.font = '700 10px ui-monospace, monospace';
+      c.textAlign = 'center';
+      c.textBaseline = 'middle';
+      for (const n of song.notes) {
+        if (n.t < tabLo || n.t > tabHi || n.tie) continue;
+        const nx = (tabToAudio(sync, n.t) - viewStartSec) * pxPerSec;
+        if (nx < -10 || nx > w + 10) continue;
+        const row = nStr - 1 - n.string;
+        if (row < 0 || row >= nStr) continue;
+        const ny = tabTop + 6 + row * rowH + rowH / 2;
+        const label = n.dead ? 'x' : String(n.fret);
+        const tw = c.measureText(label).width + 4;
+        c.fillStyle = screenBg;
+        c.fillRect(nx - tw / 2, ny - 5, tw, 10);
+        c.fillStyle = cream;
+        c.fillText(label, nx, ny + 0.5);
+      }
+      c.textAlign = 'start';
+      c.textBaseline = 'alphabetic';
+
+      // 2. Waveform (if decoded), between the ruler and the tab lane
       if (waveformPeaks && waveformDuration > 0) {
         const numBuckets = waveformPeaks.length / 2;
-        const midY = 24 + (h - 24) * 0.52;
-        const ampH = (h - 36) * 0.42;
+        const midY = 24 + (tabTop - 24) * 0.55;
+        const ampH = (tabTop - 36) * 0.42;
         c.strokeStyle = 'rgba(63, 163, 214, 0.32)';
         c.lineWidth = 1;
         c.beginPath();

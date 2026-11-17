@@ -1,6 +1,8 @@
 #include "audio_engine.h"
 
 #include <windows.h>
+#include <pmmintrin.h>
+#include <xmmintrin.h>
 
 #include <algorithm>
 #include <cmath>
@@ -847,6 +849,9 @@ int AudioEngine::handleCallback(const void* input,
                                 void* output,
                                 unsigned long frameCount,
                                 PaStreamCallbackFlags statusFlags) noexcept {
+    // Flush denormals to zero on the audio thread: NAM's network and the reverb/delay tails decay into tiny
+    // numbers that make the CPU crawl (heard as crackle at any buffer size). FTZ (0x8000) + DAZ (0x0040).
+    _mm_setcsr(_mm_getcsr() | 0x8040);
     LARGE_INTEGER qpcStart{};
     QueryPerformanceCounter(&qpcStart);
 
@@ -985,6 +990,7 @@ int AudioEngine::paMonitorCallback(const void* /*input*/,
 }
 
 int AudioEngine::handleMonitorCallback(void* output, unsigned long frameCount) noexcept {
+    _mm_setcsr(_mm_getcsr() | 0x8040);  // see handleCallback
     float* out = static_cast<float*>(output);
     const int channels = monitorChannels_;
     if (!out || frameCount == 0 || channels <= 0) {

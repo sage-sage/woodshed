@@ -1,18 +1,18 @@
 {
  "site": {
-  "updated": "2026-11-16T15:32:30-08:00"
+  "updated": "2026-11-16T16:17:59-08:00"
  },
  "setup": {
-  "version": "2.5.1",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.1/Woodshed-Setup.exe",
-  "sha256": "f6a5bac9b2122790aa7418fb9a8cca827a2d07312b217184c348ff370823df11",
-  "notes": "Woodshed 2.5.1: the Pedalboard shows your effects as full western pedals with working knobs and footswitches; Songsterr tabs offer their YouTube videos on import and start already synced; the YouTube video sits under the track instead of over it; fixes the Pedalboard flickering and missing clicks while Woodshed Amp is connected"
+  "version": "2.5.2",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.2/Woodshed-Setup.exe",
+  "sha256": "fd652bcae3106644f33a73ebc323914153b718d180b3f06be5ba58640e890e61",
+  "notes": "Woodshed 2.5.2: the sync timeline shows the tab under the waveform; fixes crackle/static through Woodshed Amp (denormal flush on the audio thread)"
  },
  "amp": {
-  "version": "2.5.1",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.1/woodshed-amp.exe",
-  "sha256": "ddb55a23d8602b6d86971d205e0d6b1a74920668e3678af790ff40cf71d38978",
-  "notes": "Woodshed 2.5.1: the Pedalboard shows your effects as full western pedals with working knobs and footswitches; Songsterr tabs offer their YouTube videos on import and start already synced; the YouTube video sits under the track instead of over it; fixes the Pedalboard flickering and missing clicks while Woodshed Amp is connected"
+  "version": "2.5.2",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.2/woodshed-amp.exe",
+  "sha256": "43873b58b21539d95fb7abd376e811c4933638bb7895839bd32bb3f09c619e0f",
+  "notes": "Woodshed 2.5.2: the sync timeline shows the tab under the waveform; fixes crackle/static through Woodshed Amp (denormal flush on the audio thread)"
  },
  "extension": {
   "version": "1.4.0",
