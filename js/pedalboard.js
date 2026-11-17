@@ -1,10 +1,11 @@
 import { isDesktop, desktop, postToHost } from './desktop.js';
-import { hasPedalArt, pedalThumb, PEDAL_THUMB_POS, pedalArtHtml, mountPedalArt } from './pedal-art.js';
+import { hasPedalArt, pedalSize, pedalArtHtml, mountPedalArt } from './pedal-art.js';
 
-const CELL_PX = 20;
+const CELL_PX = 36;
 const TILE_W = 140;
 const TILE_H = 80;
-const ZOOM_MIN = 0.5;
+const PEDAL_SCALE = 0.5;
+const ZOOM_MIN = 0.3;
 const ZOOM_MAX = 1.5;
 const ZOOM_STEP = 0.1;
 
@@ -203,7 +204,7 @@ export function mount(container, ctx) {
   let confirmDeleteOpen = false;
   let renaming = false;
   let activeInteraction = null;
-  let artCtl = null;
+  const boardArt = new Map();
 
   const viewStateByPreset = new Map();
   const faderRafs = new Map();
@@ -313,6 +314,15 @@ export function mount(container, ctx) {
     return parts.join(' · ');
   }
 
+  function tileSizeFor(node) {
+    const s = node && hasPedalArt(node.type) ? pedalSize(node.type) : null;
+    // Half size, but tall pedals shrink a little more so they fit between rows (the amp spaces rows 6 cells apart).
+    const k = s ? Math.min(PEDAL_SCALE, 200 / s.h) : 1;
+    return s
+      ? { w: Math.round(s.w * k), h: Math.round(s.h * k), pedal: true }
+      : { w: TILE_W, h: TILE_H, pedal: false };
+  }
+
   function getJackPos(graph, blockTypeMap, uid, kind, port = 0) {
     const io = getIoCoords(graph);
     if (uid === 'in') {
@@ -326,17 +336,19 @@ export function mount(container, ctx) {
     const nodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
     const node = nodes.find((n) => n.uid === uid);
     if (!node) return null;
+    const { w, h, pedal } = tileSizeFor(node);
     const x = node.x * CELL_PX;
     const y = node.y * CELL_PX;
     if (kind === 'out') {
-      return { x: x + TILE_W, y: y + TILE_H / 2 };
+      return { x: x + w, y: y + h / 2 };
     }
     const bt = blockTypeMap.get(node.type);
     const inputs = bt?.inputs || (node.type === 'mixer' ? 2 : 1);
     if (inputs >= 2) {
-      return { x, y: y + (Number(port) === 1 ? 56 : 24) };
+      const py = pedal ? (Number(port) === 1 ? h * 0.65 : h * 0.35) : (Number(port) === 1 ? 56 : 24);
+      return { x, y: y + py };
     }
-    return { x, y: y + TILE_H / 2 };
+    return { x, y: y + h / 2 };
   }
 
   function renderOffline() {
@@ -486,12 +498,29 @@ export function mount(container, ctx) {
       const isSelected = selectedUid === node.uid;
       const isDisconnected = !connectedSet.has(node.uid);
       const inputs = bt?.inputs || (node.type === 'mixer' ? 2 : 1);
-      const summary = getNodeSummary(node, bt);
+      const size = tileSizeFor(node);
 
-      const hasArt = hasPedalArt(node.type);
-      const artStyle = hasArt
-        ? `--art:url(${pedalThumb(node.type)});--art-pos:${PEDAL_THUMB_POS[node.type] || 'center'};`
-        : '';
+      if (size.pedal) {
+        const inJacksHtml = inputs >= 2
+          ? `
+            <div class="pb-jack is-in is-port-a" style="top:35%" data-uid="${escapeHtml(node.uid)}" data-dir="in" data-port="0" title="Input A"><span class="pb-jack-lbl">A</span></div>
+            <div class="pb-jack is-in is-port-b" style="top:65%" data-uid="${escapeHtml(node.uid)}" data-dir="in" data-port="1" title="Input B"><span class="pb-jack-lbl">B</span></div>
+          `
+          : `<div class="pb-jack is-in" data-uid="${escapeHtml(node.uid)}" data-dir="in" data-port="0" title="Input jack"></div>`;
+
+        return `
+          <div class="pb-tile is-pedal${isEnabled ? '' : ' is-off'}${isSelected ? ' is-selected' : ''}${isDisconnected ? ' is-disconnected' : ''}"
+            data-uid="${escapeHtml(node.uid)}" tabindex="0" aria-label="${escapeHtml(name)} tile"
+            ${isDisconnected ? 'title="Not connected"' : ''}
+            style="left:${node.x * CELL_PX}px;top:${node.y * CELL_PX}px;width:${size.w}px;height:${size.h}px;--cat:${catColor};">
+            <div class="pb-pedal-art">${pedalArtHtml(node.type)}</div>
+            ${inJacksHtml}
+            <div class="pb-jack is-out" data-uid="${escapeHtml(node.uid)}" data-dir="out" data-port="0" title="Output jack"></div>
+          </div>
+        `;
+      }
+
+      const summary = getNodeSummary(node, bt);
 
       const inJacksHtml = inputs >= 2
         ? `
@@ -501,10 +530,10 @@ export function mount(container, ctx) {
         : `<div class="pb-jack is-in" data-uid="${escapeHtml(node.uid)}" data-dir="in" data-port="0" title="Input jack"></div>`;
 
       return `
-        <div class="pb-tile${isEnabled ? '' : ' is-off'}${isSelected ? ' is-selected' : ''}${isDisconnected ? ' is-disconnected' : ''}${hasArt ? ' has-art' : ''}"
+        <div class="pb-tile${isEnabled ? '' : ' is-off'}${isSelected ? ' is-selected' : ''}${isDisconnected ? ' is-disconnected' : ''}"
           data-uid="${escapeHtml(node.uid)}" tabindex="0" aria-label="${escapeHtml(name)} tile"
           ${isDisconnected ? 'title="Not connected"' : ''}
-          style="left:${node.x * CELL_PX}px;top:${node.y * CELL_PX}px;--cat:${catColor};${artStyle}">
+          style="left:${node.x * CELL_PX}px;top:${node.y * CELL_PX}px;--cat:${catColor};">
           <div class="pb-tile-head">
             <button type="button" class="stomp pb-stomp${isEnabled ? ' is-on' : ''}" data-uid="${escapeHtml(node.uid)}"
               aria-label="Toggle ${escapeHtml(name)}" aria-pressed="${isEnabled ? 'true' : 'false'}" title="${isEnabled ? 'Bypass' : 'Enable'}"></button>
@@ -822,7 +851,6 @@ export function mount(container, ctx) {
         <button type="button" class="btn btn-sm btn-ghost pb-insp-close" id="pb-insp-close" aria-label="Close inspector">×</button>
       </div>
       <div class="pb-insp-body">
-        ${hasPedalArt(node.type) ? `<div class="pb-insp-art" id="pb-insp-art">${pedalArtHtml(node.type)}</div>` : ''}
         ${fileRowHtml}
         ${fadersHtml}
         ${optionsHtml}
@@ -854,13 +882,20 @@ export function mount(container, ctx) {
     if (view.fitPending && viewport) {
       const rect = viewport.getBoundingClientRect();
       const io = getIoCoords(graph);
-      const pts = [[io.inX, io.inY], [io.outX, io.outY], ...nodes.map((nd) => [Number(nd.x) || 0, Number(nd.y) || 0])];
-      if (rect.width > 50 && rect.height > 50 && pts.length) {
+      const boxes = [
+        { x: io.inX * CELL_PX, y: io.inY * CELL_PX, w: TILE_W, h: TILE_H },
+        { x: io.outX * CELL_PX, y: io.outY * CELL_PX, w: TILE_W, h: TILE_H },
+        ...nodes.map((nd) => {
+          const sz = tileSizeFor(nd);
+          return { x: (Number(nd.x) || 0) * CELL_PX, y: (Number(nd.y) || 0) * CELL_PX, w: sz.w, h: sz.h };
+        })
+      ];
+      if (rect.width > 50 && rect.height > 50 && boxes.length) {
         view.fitPending = false;
-        const minX = Math.min(...pts.map((p) => p[0])) * CELL_PX;
-        const minY = Math.min(...pts.map((p) => p[1])) * CELL_PX;
-        const maxX = Math.max(...pts.map((p) => p[0])) * CELL_PX + TILE_W;
-        const maxY = Math.max(...pts.map((p) => p[1])) * CELL_PX + TILE_H;
+        const minX = Math.min(...boxes.map((b) => b.x));
+        const minY = Math.min(...boxes.map((b) => b.y));
+        const maxX = Math.max(...boxes.map((b) => b.x + b.w));
+        const maxY = Math.max(...boxes.map((b) => b.y + b.h));
         const pad = 40;
         const zoom = clamp(Math.min(1, (rect.width - pad * 2) / (maxX - minX), (rect.height - pad * 2) / (maxY - minY)), ZOOM_MIN, ZOOM_MAX);
         view.zoom = Math.round(zoom * 100) / 100;
@@ -1376,7 +1411,7 @@ export function mount(container, ctx) {
 
       tileEl.addEventListener('pointerdown', (e) => {
         if (e.button !== 0) return;
-        if (e.target.closest('.pb-jack') || e.target.closest('.pb-stomp')) return;
+        if (e.target.closest('.pb-jack') || e.target.closest('.pb-stomp') || e.target.closest('.pa [role="slider"], .pa [role="button"]')) return;
         e.stopPropagation();
 
         const io = getIoCoords(graph);
@@ -1623,7 +1658,7 @@ export function mount(container, ctx) {
         const v = parseFloat(slider.value);
         if (!node.params) node.params = {};
         node.params[key] = v;
-        if (artCtl && !slider.dataset.fromArt) artCtl.set(key, v);
+        boardArt.get(uid)?.set(key, v);
         if (valEl) valEl.textContent = formatBoardVal(spec, v);
         if (tileSumEl) {
           const sum = getNodeSummary(node, bt);
@@ -1674,29 +1709,41 @@ export function mount(container, ctx) {
       });
     });
 
-    artCtl?.destroy?.();
-    artCtl = null;
-    const artRoot = container.querySelector('#pb-insp-art .pa');
-    const artNode = artRoot ? nodes.find((n) => n.uid === selectedUid) : null;
-    if (artNode) {
-      const bt = blockTypeMap.get(artNode.type);
-      artCtl = mountPedalArt(artRoot, {
-        type: artNode.type,
+    boardArt.forEach((ctl) => ctl?.destroy?.());
+    boardArt.clear();
+    container.querySelectorAll('.pb-tile.is-pedal').forEach((tileEl) => {
+      const uid = tileEl.dataset.uid;
+      const node = nodes.find((n) => n.uid === uid);
+      const root = tileEl.querySelector('.pa');
+      if (!node || !root) return;
+      const bt = blockTypeMap.get(node.type);
+      boardArt.set(uid, mountPedalArt(root, {
+        type: node.type,
         specs: bt?.params || [],
-        params: artNode.params || {},
-        enabled: artNode.enabled !== false,
+        params: node.params || {},
+        enabled: node.enabled !== false,
         onParam(key, value) {
-          const slider = container.querySelector(`.pb-param-slider[data-param-key="${CSS.escape(key)}"]`);
-          if (slider) {
-            slider.dataset.fromArt = '1';
-            slider.value = String(value);
-            slider.dispatchEvent(new Event('input', { bubbles: true }));
-            delete slider.dataset.fromArt;
+          if (!node.params) node.params = {};
+          node.params[key] = value;
+          if (selectedUid === uid) {
+            const slider = container.querySelector(`.pb-param-slider[data-param-key="${CSS.escape(key)}"]`);
+            if (slider) {
+              slider.value = String(value);
+              const valEl = container.querySelector(`[data-pb-param-val="${CSS.escape(key)}"]`);
+              const spec = bt?.params?.find((p) => p.key === key);
+              if (valEl && spec) valEl.textContent = formatBoardVal(spec, value);
+            }
           }
+          scheduleFaderSend(`param:${preset.id}:${uid}:${key}`, () => amp.setBlockParam(preset.id, uid, key, value));
         },
-        onToggle() { container.querySelector('#pb-insp-toggle')?.click(); }
-      });
-    }
+        onToggle() {
+          const nextOn = node.enabled === false;
+          node.enabled = nextOn;
+          amp.setBlockEnabled(preset.id, uid, nextOn);
+          render();
+        }
+      }));
+    });
   }
 
   // Document-level click to close popovers

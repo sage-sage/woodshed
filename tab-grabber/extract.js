@@ -1485,7 +1485,36 @@
       if (!Array.isArray(raw.measures) || raw.measures.length === 0) return null;
       if (!Array.isArray(raw.tuning) || raw.tuning.length === 0) return null;
 
+      async function readSongsterrVideos(songId, revisionId) {
+        try {
+          const r = await fetch(`/api/video-points/${encodeURIComponent(songId)}/${encodeURIComponent(revisionId)}/list`, { credentials: 'omit' });
+          if (!r.ok) return [];
+          const list = await r.json();
+          if (!Array.isArray(list)) return [];
+          const seen = new Set();
+          const items = [];
+          for (const entry of list) {
+            if (!entry || typeof entry !== 'object') continue;
+            if (entry.status !== 'done') continue;
+            if (typeof entry.videoId !== 'string' || !/^[A-Za-z0-9_-]{11}$/.test(entry.videoId)) continue;
+            if (!Array.isArray(entry.points) || entry.points.length < 2) continue;
+            if (!entry.points.every((p) => typeof p === 'number' && Number.isFinite(p))) continue;
+            if (seen.has(entry.videoId)) continue;
+            seen.add(entry.videoId);
+            const kind = entry.feature == null ? 'original' : String(entry.feature);
+            const points = entry.points.map((p) => Math.round(p * 100) / 100);
+            items.push({ videoId: entry.videoId, kind, points });
+          }
+          const rank = (k) => (k === 'original' ? 0 : k === 'backing' ? 1 : k === 'solo' ? 2 : k === 'alternative' ? 3 : 4);
+          items.sort((a, b) => rank(a.kind) - rank(b.kind));
+          return items.slice(0, 12);
+        } catch {
+          return [];
+        }
+      }
+
       const notation = compactSongsterrNotation(raw, songId, revisionId, partId);
+      if (revisionId !== null) notation.videos = await readSongsterrVideos(songId, revisionId);
       const toAscii = globalThis.WoodshedNotation?.notationToAscii || globalThis.WoodshedSongsterr?.notationToAscii;
       const text = typeof toAscii === 'function' ? toAscii(notation) : '';
       if (!text || !text.trim()) return null;

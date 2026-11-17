@@ -372,3 +372,37 @@ export function songsterrToSong(notation, meta = {}) {
     }
   });
 }
+
+export function songsterrVideoAnchors(song, points) {
+  if (!song || typeof song !== 'object') return [];
+  const bars = song.bars;
+  if (!Array.isArray(bars) || bars.length === 0) return [];
+  if (!Array.isArray(points) || points.length === 0) return [];
+
+  const duration = song.duration;
+  const raw = [];
+  const count = Math.min(bars.length, points.length);
+  for (let i = 0; i < count; i++) {
+    const tab = bars[i]?.t;
+    const audio = points[i];
+    if (typeof tab === 'number' && Number.isFinite(tab) && typeof audio === 'number' && Number.isFinite(audio)) {
+      raw.push({ tab, audio });
+    }
+  }
+
+  if (points.length > bars.length && typeof duration === 'number' && Number.isFinite(duration)) {
+    const endAudio = points[bars.length];
+    if (typeof endAudio === 'number' && Number.isFinite(endAudio)) {
+      raw.push({ tab: duration, audio: endAudio });
+    }
+  }
+
+  const anchors = [];
+  for (const anchor of raw) {
+    if (anchors.length === 0 || anchor.audio > anchors[anchors.length - 1].audio) {
+      anchors.push(anchor);
+    }
+  }
+
+  return anchors.length >= 2 ? anchors : [];
+}

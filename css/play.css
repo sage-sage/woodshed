@@ -828,3 +828,34 @@
     justify-content: center;
   }
 }
+
+/* The YouTube video sits at the right, just under the highway (beside the fingering fretboard), so it never covers the track. */
+.play-under {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  border-top: 1px solid var(--line);
+  box-sizing: border-box;
+}
+.play-under:not(:has(> :not(.hidden))) {
+  display: none;
+}
+.play-under > .yt-pip-dock {
+  position: static;
+  flex: 0 0 auto;
+  width: 192px;
+  height: auto;
+  aspect-ratio: 16 / 9;
+  margin: 8px 12px 8px auto;
+}
+.play-under > .yt-pip-dock.hidden {
+  display: none;
+}
+.play-under > .play-fretboard-strip {
+  flex: 1 1 auto;
+  width: auto;
+  min-width: 0;
+  border-top: 0;
+}

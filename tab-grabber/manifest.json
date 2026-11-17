@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Woodshed Tab Grabber",
-  "version": "1.3.0",
+  "version": "1.4.0",
   "description": "Grab ASCII guitar tabs from the active page and send them straight to Woodshed.",
   "icons": {
     "16": "icons/16.png",

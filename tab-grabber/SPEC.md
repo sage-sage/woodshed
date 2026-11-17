@@ -5,8 +5,11 @@ Woodshed's parser understands (`parseAsciiTab`: systems of `e|--0--2--|` string 
 systems are ignored), and sends it to Woodshed's import page with title, artist, tuning, capo and tempo filled in.
 
 Rules: it only reads what the page already shows the user (or data the page itself already embedded for that view).
-It never calls a site's private API (one exception, approved by the user on 2026-11-15: on Songsterr it re-reads the
-note-data file the page itself already downloaded for the track being viewed, to get the exact rhythm), never bypasses login or paywalls (Ultimate Guitar "Pro"/"Official" tabs that are
+It never calls a site's private API (two exceptions on Songsterr, both data the page itself already downloads for the song
+being viewed: the note-data file for the shown track, to get the exact rhythm, approved by the user on 2026-11-15; and the
+video-points list `/api/video-points/<songId>/<revisionId>/list`, the per-bar YouTube timings, so Woodshed can start a
+song already synced, approved by the user on 2026-11-16 knowing Songsterr sells uninterrupted video sync in its Plus
+plan; the user asked that this not be advertised in the UI), never bypasses login or paywalls (Ultimate Guitar "Pro"/"Official" tabs that are
 locked stay locked: show "This tab isn't available as text on this page"), never runs on pages until the user clicks
 the extension (activeTab + scripting), and sends nothing anywhere except to the Woodshed tab the user chose.
 

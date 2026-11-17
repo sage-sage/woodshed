@@ -497,20 +497,11 @@
   box-shadow: 0 0 0 2px var(--accent), 0 6px 16px rgba(0, 0, 0, 0.55);
 }
 
-.pb-tile.has-art {
-  background-image: linear-gradient(180deg, rgba(14,11,9,.82) 0, rgba(14,11,9,.35) 46%, rgba(14,11,9,.88) 100%), var(--art);
-  background-size: cover;
-  background-position: center, var(--art-pos, center);
-}
-
-.pb-tile.has-art.is-off {
-  filter: grayscale(.7) brightness(.75);
-}
-
-.pb-tile.has-art .pb-tile-title,
-.pb-tile.has-art .pb-tile-summary {
-  text-shadow: 0 1px 2px rgba(0,0,0,.9);
-}
+.pb-tile.is-pedal { padding: 0; background: none; border: 0; border-radius: 0; box-shadow: 0 8px 18px rgba(0,0,0,.55); }
+.pb-tile.is-pedal .pb-pedal-art { width: 100%; height: 100%; overflow: hidden; }
+.pb-tile.is-pedal.is-selected { outline: 2px solid var(--accent); outline-offset: 4px; }
+.pb-tile.is-pedal.is-off .pb-pedal-art { filter: saturate(.45) brightness(.7); }
+.pb-tile.is-pedal.is-disconnected .pb-pedal-art { opacity: .55; }
 
 .pb-tile.is-selected {
   border-color: var(--accent);
@@ -649,12 +640,6 @@
   gap: 8px;
   padding: 11px 14px;
   border-bottom: 1px solid var(--line);
-}
-
-.pb-insp-art {
-  margin: 0 0 14px;
-  display: flex;
-  justify-content: center;
 }
 
 .pb-insp-title {

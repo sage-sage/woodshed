@@ -1,6 +1,6 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
-import { songsterrToSong, describeSongsterr } from '../js/songsterr.js';
+import { songsterrToSong, describeSongsterr, songsterrVideoAnchors } from '../js/songsterr.js';
 
 const STD_TUNING_HIGH_LOW = [64, 59, 55, 50, 45, 40];
 
@@ -23,6 +23,47 @@ function makeNotation(overrides = {}) {
     ...overrides
   };
 }
+
+describe('songsterrVideoAnchors', () => {
+  it('maps 3 bars + 5 points to 4 anchors including song duration end anchor', () => {
+    const song = { bars: [{ t: 0 }, { t: 2 }, { t: 4 }], duration: 6 };
+    const anchors = songsterrVideoAnchors(song, [1.5, 3.5, 5.5, 7.5, 9.0]);
+    assert.deepEqual(anchors, [
+      { tab: 0, audio: 1.5 },
+      { tab: 2, audio: 3.5 },
+      { tab: 4, audio: 5.5 },
+      { tab: 6, audio: 7.5 }
+    ]);
+  });
+
+  it('maps available points when fewer points than bars are provided', () => {
+    const song = { bars: [{ t: 0 }, { t: 2 }, { t: 4 }, { t: 6 }], duration: 8 };
+    const anchors = songsterrVideoAnchors(song, [0.5, 2.5]);
+    assert.deepEqual(anchors, [
+      { tab: 0, audio: 0.5 },
+      { tab: 2, audio: 2.5 }
+    ]);
+  });
+
+  it('drops non-increasing audio points to keep anchors strictly monotonic', () => {
+    const song = { bars: [{ t: 0 }, { t: 2 }, { t: 4 }, { t: 6 }], duration: 8 };
+    const anchors = songsterrVideoAnchors(song, [1.0, 3.0, 3.0, 2.5, 5.0]);
+    assert.deepEqual(anchors, [
+      { tab: 0, audio: 1.0 },
+      { tab: 2, audio: 3.0 },
+      { tab: 8, audio: 5.0 }
+    ]);
+  });
+
+  it('returns an empty array when fewer than 2 anchors survive or input is invalid', () => {
+    const song = { bars: [{ t: 0 }, { t: 2 }], duration: 4 };
+    assert.deepEqual(songsterrVideoAnchors(song, [2.0, 2.0, 1.0]), []);
+    assert.deepEqual(songsterrVideoAnchors(song, [1.0]), []);
+    assert.deepEqual(songsterrVideoAnchors(null, [1.0, 2.0]), []);
+    assert.deepEqual(songsterrVideoAnchors({ bars: [] }, [1.0, 2.0]), []);
+    assert.deepEqual(songsterrVideoAnchors(song, null), []);
+  });
+});
 
 describe('songsterrToSong', () => {
   it('(a) converts 2 bars of 4/4 quarter notes at 120 bpm into 8 notes at 0.5s intervals', () => {

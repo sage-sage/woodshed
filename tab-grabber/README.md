@@ -30,7 +30,7 @@ Click **Open library** in the popup to browse, search, tag, annotate, export, an
 ## Supported Sites
 
 - **Text tab sites:** Ultimate Guitar (plain text tabs), Cifra Club, E-Chords, AZChords, GuitarTabs.cc, GuitareTab, BigBassTabs, Tabs4Acoustic, Chordie, and any generic web page containing `<pre>`, `<code>`, `<textarea>`, or monospace preformatted tab blocks.
-- **Songsterr:** Reads the note-data file the Songsterr page already loaded for the track you are viewing, so Woodshed gets the exact rhythm (durations, triplets, ties, repeats, tempo and time-signature changes). Nothing else is requested, no login is used and nothing paywalled is read. If that file isn't available it falls back to reading the drawn tab, where rhythm is only estimated. **Limits:** reads only the track currently shown (switch tracks on Songsterr to save another).
+- **Songsterr:** Reads the note-data file the Songsterr page already loaded for the track you are viewing, so Woodshed gets the exact rhythm (durations, triplets, ties, repeats, tempo and time-signature changes). It also reads the song's video timing list that the same page loads, so Woodshed can line YouTube videos up with the tab. Nothing else is requested and no login is used. If that file isn't available it falls back to reading the drawn tab, where rhythm is only estimated. **Limits:** reads only the track currently shown (switch tracks on Songsterr to save another).
 - **Selection override:** Selecting ≥ 3 lines containing ≥ 4 consecutive tab lines takes priority on any site.
 - **Unsupported / chords-only pages:** Ultimate Guitar Pro/Official/Guitar Pro interactive tabs, 911Tabs link directories, and Chordify or chord-sheet pages display a clear explanation.
 

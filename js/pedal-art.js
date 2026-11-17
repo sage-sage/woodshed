@@ -23,6 +23,7 @@ const MOTION = {"a-swing":["gain",17,12],"a-eyes":["level",11,8],"a-tw":["size",
   "a-fleck":["low",7,4],"a-rattle":["level",5.5,4],"a-chorus":["rate",6,4.5],"fx-spin":["rate",34,28],"a-hoof":["speed",3.6,2.6],
   "a-roll":["rate",4.2,3.2],"a-kick":["wah",5.2,3.6],"a-spur":["wah",5.2,3.6]};
 
+export function pedalSize(type) { const p = PEDALS[type]; return p ? { w: p.w, h: p.h } : null; }
 export function hasPedalArt(type) { return Object.prototype.hasOwnProperty.call(PEDALS, type); }
 export function pedalThumb(type) { return hasPedalArt(type) ? new URL('../' + PEDALS[type].thumb, import.meta.url).href : null; }
 
@@ -131,7 +132,7 @@ export function mountPedalArt(root, opts) {
     const cur = Number.isFinite(opts.params?.[spec.key]) ? opts.params[spec.key] : spec.def;
     show(c, norm(spec, cur, invert), true);
     handle.addEventListener('pointerdown', (e) => {
-      e.preventDefault(); handle.focus(); handle.setPointerCapture(e.pointerId);
+      e.preventDefault(); e.stopPropagation(); handle.focus(); handle.setPointerCapture(e.pointerId);
       const groove = slider ? el.parentElement : null;
       const y0 = e.clientY, n0 = +el.dataset.v;
       const move = (ev) => {
@@ -142,7 +143,7 @@ export function mountPedalArt(root, opts) {
       const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); };
       handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up);
     });
-    handle.addEventListener('wheel', (e) => { e.preventDefault(); userSet(c, +el.dataset.v - Math.sign(e.deltaY) * 0.05); }, { passive: false });
+    handle.addEventListener('wheel', (e) => { e.preventDefault(); e.stopPropagation(); userSet(c, +el.dataset.v - Math.sign(e.deltaY) * 0.05); }, { passive: false });
     handle.addEventListener('keydown', (e) => {
       const d = { ArrowUp: 0.05, ArrowRight: 0.05, ArrowDown: -0.05, ArrowLeft: -0.05 }[e.key];
       if (d) { e.preventDefault(); userSet(c, +el.dataset.v + d); }
@@ -153,7 +154,8 @@ export function mountPedalArt(root, opts) {
   if (fs) {
     fs.setAttribute('role', 'button'); fs.tabIndex = 0;
     fs.setAttribute('aria-label', 'Bypass');
-    const press = (e) => { e.preventDefault(); if (opts.onToggle) opts.onToggle(); };
+    const press = (e) => { e.preventDefault(); e.stopPropagation(); if (opts.onToggle) opts.onToggle(); };
+    fs.addEventListener('pointerdown', (e) => e.stopPropagation());
     fs.addEventListener('click', press);
     fs.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') press(e); });
   }

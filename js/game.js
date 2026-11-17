@@ -1018,10 +1018,12 @@ export class Game {
           </div>
           <div class="highway-stage">
             <canvas id="highway-canvas"></canvas>
-            <div id="yt-pip-dock" class="yt-pip-dock hidden"></div>
           </div>
-          <div class="play-fretboard-strip${showFingering ? '' : ' hidden'}" id="play-fretboard-wrap">
-            <div id="play-mini-fretboard" class="fretboard"></div>
+          <div class="play-under">
+            <div class="play-fretboard-strip${showFingering ? '' : ' hidden'}" id="play-fretboard-wrap">
+              <div id="play-mini-fretboard" class="fretboard"></div>
+            </div>
+            <div id="yt-pip-dock" class="yt-pip-dock hidden"></div>
           </div>
         </section>
 

@@ -1,7 +1,7 @@
 import { TUNINGS, DEMO_SONG_TAB, buildEvents, midiToName } from './song.js';
 import { parseAsciiTab } from './tab-ascii.js';
 import { loadTabFile, TAB_FILE_EXTENSIONS } from './tab-gp.js';
-import { songsterrToSong, describeSongsterr } from './songsterr.js';
+import { songsterrToSong, describeSongsterr, songsterrVideoAnchors } from './songsterr.js';
 import { parseYouTubeId, createBackend, YOUTUBE_BLOCKED, YOUTUBE_BLOCKED_MSG } from './player.js';
 import { Highway } from './highway.js';
 
@@ -9,6 +9,41 @@ const NOTE_TO_PC = {
   C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5,
   'F#': 6, Gb: 6, G: 7, 'G#': 8, Ab: 8, A: 9, 'A#': 10, Bb: 10, B: 11
 };
+
+const ytTitleCache = new Map();
+
+function ytSuggestKindLabel(kind) {
+  if (kind === 'original') return 'Original recording';
+  if (kind === 'backing') return 'Backing track';
+  if (kind === 'solo') return 'Solo';
+  return 'Other version';
+}
+
+function fillYtSuggestTitle(el, id) {
+  if (!el) return;
+  // Videos that are gone or can't be embedded fail this lookup (404/401); they wouldn't play here, so drop their card.
+  const dropCard = () => { const card = el.closest('.yt-suggest-card'); if (card) card.remove(); };
+  if (ytTitleCache.has(id)) {
+    const cached = ytTitleCache.get(id);
+    if (cached === null) dropCard(); else el.textContent = cached;
+    return;
+  }
+  fetch(`https://www.youtube.com/oembed?url=${encodeURIComponent('https://www.youtube.com/watch?v=' + id)}&format=json`)
+    .then((r) => {
+      if (r.status === 401 || r.status === 403 || r.status === 404) { ytTitleCache.set(id, null); dropCard(); return null; }
+      return r.ok ? r.json() : null;
+    })
+    .then((data) => {
+      if (!data || typeof data !== 'object') return;
+      const title = typeof data.title === 'string' ? data.title.trim() : '';
+      const author = typeof data.author_name === 'string' ? data.author_name.trim() : '';
+      const label = title && author ? `${title} · ${author}` : (title || author);
+      if (!label) return;
+      ytTitleCache.set(id, label);
+      if (el.isConnected) el.textContent = label;
+    })
+    .catch(() => {});
+}
 
 function matchTuningPreset(tuningStr) {
   if (!tuningStr || typeof tuningStr !== 'string') return 'auto';
@@ -78,6 +113,9 @@ export function mount(container, ctx) {
     ytUrl: '',
     ytVideoId: null,
     ytError: '',
+    ssVideos: [],
+    ytPoints: null,
+    ytPointsId: '',
 
     audioFileBlob: null,
     audioFileName: '',
@@ -521,12 +559,27 @@ export function mount(container, ctx) {
   }
 
   function renderStep2(bodyEl) {
+    const suggestHtml = state.ssVideos.length > 0 && !YOUTUBE_BLOCKED
+      ? `<div class="yt-suggest">
+          <div class="yt-suggest-head">Videos for this tab</div>
+          <div class="yt-suggest-grid">${state.ssVideos.map((v) => {
+            const selected = state.ytPointsId === v.videoId && state.audioKind === 'youtube' ? ' is-selected' : '';
+            return `<button type="button" class="yt-suggest-card${selected}" data-yt-suggest="${v.videoId}">
+              <img src="https://i.ytimg.com/vi/${v.videoId}/mqdefault.jpg" alt="" loading="lazy" />
+              <span class="yt-suggest-kind">${ytSuggestKindLabel(v.kind)}</span>
+              <span class="yt-suggest-title" data-yt-title="${v.videoId}"></span>
+            </button>`;
+          }).join('')}</div>
+        </div>`
+      : '';
+
     bodyEl.innerHTML = `
       <div class="card">
         <h2 class="serif-heading">Choose Backing Audio</h2>
         <p style="margin:0 0 16px;color:var(--text-muted);font-size:0.88rem;">
           Play along with an official YouTube video, a local backing track on your computer, a direct audio link, or practice solo with the built-in guitar synth.
         </p>
+        ${suggestHtml}
 
         <div class="audio-choice-grid">
           <button type="button" class="audio-choice-card ${state.audioKind === 'none' ? 'selected' : ''}" data-audio-kind="none">
@@ -559,6 +612,22 @@ export function mount(container, ctx) {
         </div>
       </div>
     `;
+
+    bodyEl.querySelectorAll('[data-yt-suggest]').forEach((btn) => {
+      const id = btn.dataset.ytSuggest;
+      const video = state.ssVideos.find((v) => v.videoId === id);
+      btn.addEventListener('click', () => {
+        if (!video) return;
+        destroyPreviewBackend();
+        state.audioKind = 'youtube';
+        state.ytUrl = `https://www.youtube.com/watch?v=${id}`;
+        state.ytVideoId = id;
+        state.ytPoints = video.points;
+        state.ytPointsId = id;
+        render();
+      });
+      fillYtSuggestTitle(btn.querySelector('[data-yt-title]'), id);
+    });
 
     bodyEl.querySelectorAll('[data-audio-kind]').forEach((btn) => {
       btn.addEventListener('click', () => {
@@ -593,6 +662,10 @@ export function mount(container, ctx) {
         state.ytUrl = urlVal;
         const id = parseYouTubeId(urlVal);
         state.ytVideoId = id;
+        if (id !== state.ytPointsId) {
+          state.ytPoints = null;
+          state.ytPointsId = '';
+        }
         destroyPreviewBackend();
 
         if (!urlVal.trim()) {
@@ -780,6 +853,9 @@ export function mount(container, ctx) {
     let audioSummary = 'No recording — Built-in guitar synth & metronome';
     if (state.audioKind === 'youtube') {
       audioSummary = `YouTube Video (${state.ytVideoId})`;
+      if (state.ytPoints && state.ytPointsId === state.ytVideoId) {
+        audioSummary += ' · lined up with the tab';
+      }
     } else if (state.audioKind === 'file') {
       audioSummary = `Local Audio File: ${state.audioFileName} (${formatBytes(state.audioFileSize)})`;
     } else if (state.audioKind === 'url') {
@@ -842,11 +918,15 @@ export function mount(container, ctx) {
         audioDesc = { kind: 'url', url: state.audioDirectUrl };
       }
 
+      const presetAnchors = (state.audioKind === 'youtube' && state.ytPoints && state.ytPointsId === state.ytVideoId)
+        ? songsterrVideoAnchors(song, state.ytPoints)
+        : [];
+
       const [numStr, denStr] = state.timeSig.split('/');
       const record = {
         id,
         song,
-        sync: { anchors: [] },
+        sync: { anchors: presetAnchors },
         audio: audioDesc,
         importText: state.tabSourceMode === 'paste' ? state.asciiText : undefined,
         importOpts: state.tabSourceMode === 'paste'
@@ -873,7 +953,9 @@ export function mount(container, ctx) {
       }
 
       ctx.toast(`Saved "${song.title}"`, 'success');
-      if (hasRecording) {
+      if (presetAnchors.length > 0) {
+        ctx.navigate(`#/song/${id}/play`);
+      } else if (hasRecording) {
         ctx.navigate(`#/song/${id}/sync`);
       } else {
         ctx.navigate(`#/song/${id}/play`);
@@ -887,6 +969,9 @@ export function mount(container, ctx) {
 
     destroyPreviewBackend();
     state.step = 1;
+    state.ssVideos = [];
+    state.ytPoints = null;
+    state.ytPointsId = '';
 
     if (payload.notation && typeof payload.notation === 'object') {
       const n = payload.notation;
@@ -907,6 +992,7 @@ export function mount(container, ctx) {
         state.gpArtist = artist;
         state.gpFileName = `Songsterr: ${n.name || 'track'}`;
         state.gpError = '';
+        state.ssVideos = Array.isArray(n.videos) ? n.videos.filter((v) => v && typeof v.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(v.videoId) && Array.isArray(v.points)) : [];
         ctx.toast('Tab from Songsterr loaded with exact rhythm — check it and press Next', 'success');
         return true;
       } catch (err) {
