@@ -69,7 +69,7 @@ done
 wait_all
 
 echo "Woodshed Amp"
-APP_SRC=(src/dsp/builtin_amp.cpp src/dsp/cab.cpp src/dsp/effects.cpp src/dsp/board.cpp src/dsp/chain.cpp src/nam_slot.cpp src/wav.cpp
+APP_SRC=(src/dsp/builtin_amp.cpp src/dsp/cab.cpp src/dsp/effects.cpp src/dsp/metal.cpp src/dsp/board.cpp src/dsp/chain.cpp src/nam_slot.cpp src/wav.cpp
          src/presets.cpp)
 NET_SRC=(src/sha1_base64.cpp src/ws_server.cpp)
 APPONLY_SRC=(src/audio_engine.cpp src/app_controller.cpp src/updater.cpp src/tray.cpp src/main.cpp)

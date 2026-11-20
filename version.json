@@ -1,21 +1,21 @@
 {
  "site": {
-  "updated": "2026-11-16T16:24:52-08:00"
+  "updated": "2026-11-16T16:39:14-08:00"
  },
  "setup": {
-  "version": "2.5.3",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.3/Woodshed-Setup.exe",
-  "sha256": "d3bcc2df8b9ec51d4685ddf949e624216c6558236939697633b6127e09a587da",
-  "notes": "Woodshed 2.5.3: the guide guitar plays clean after your amp (no more distortion on it) in the song's recorded tone, without the crackle (deeper buffer, clock-drift correction, fades instead of cuts); Tab Grabber 1.5.0 sends tabs straight to the desktop app when no Woodshed tab is open; Saved Tabs keep their exact rhythm and videos"
+  "version": "2.6.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.6.0/Woodshed-Setup.exe",
+  "sha256": "e0609bee7d498e69af8a3585a50907f19d4cb0b8f3b66698818590fc177888eb",
+  "notes": "Woodshed 2.6.0: Metal pedal (Dynamite), light mode everywhere (highway, fretboard, tuner, pedalboard), tuner ignores the pitch jump when you mute a string, amp picks up audio interfaces plugged in while running (plus Rescan devices), techniques (bends/slides) in tabs, play deck and loop inputs, pedalboard speed-ups and right-click menu, preset static fix, Tab Grabber 1.6.0 track picking, new update dialog."
  },
  "amp": {
-  "version": "2.5.3",
-  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.5.3/woodshed-amp.exe",
-  "sha256": "4e2dc3629a2d6e0101617962dc96b0f9c3fcbfb5b63a434b09e13ba393b0174f",
-  "notes": "Woodshed 2.5.3: the guide guitar plays clean after your amp (no more distortion on it) in the song's recorded tone, without the crackle (deeper buffer, clock-drift correction, fades instead of cuts); Tab Grabber 1.5.0 sends tabs straight to the desktop app when no Woodshed tab is open; Saved Tabs keep their exact rhythm and videos"
+  "version": "2.6.0",
+  "url": "https://github.com/sage-sage/woodshed/releases/download/v2.6.0/woodshed-amp.exe",
+  "sha256": "b5db0de2b3b44d9c227bb7a25a8b0c02683ff74d94f4b81abb697dc5ad780242",
+  "notes": "Woodshed 2.6.0: Metal pedal (Dynamite), light mode everywhere (highway, fretboard, tuner, pedalboard), tuner ignores the pitch jump when you mute a string, amp picks up audio interfaces plugged in while running (plus Rescan devices), techniques (bends/slides) in tabs, play deck and loop inputs, pedalboard speed-ups and right-click menu, preset static fix, Tab Grabber 1.6.0 track picking, new update dialog."
  },
  "extension": {
-  "version": "1.5.0",
+  "version": "1.6.0",
   "url": "downloads/woodshed-tab-grabber.zip"
  }
 }

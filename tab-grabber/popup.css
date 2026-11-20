@@ -163,6 +163,14 @@ main {
   color: #8c8c8c;
 }
 
+.warning-line.is-alert {
+  color: #f0b44c;
+}
+
+.track-row {
+  margin: 0 0 10px;
+}
+
 .controls-grid {
   display: grid;
   grid-template-columns: 1.7fr 0.75fr 0.85fr;

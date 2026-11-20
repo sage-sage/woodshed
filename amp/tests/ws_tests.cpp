@@ -9,6 +9,7 @@
 
 #include "sha1_base64.h"
 #include "ws_server.h"
+#include "device_policy.h"
 
 namespace {
 
@@ -240,7 +241,20 @@ void testWsa1Parse() {
     CHECK(!wsamp::parseWsa1Frame(tiny, rate, idx, out));
 }
 
+// Windows says devices changed: rescan (stop, Pa_Terminate/Pa_Initialize, reopen) or leave the stream alone?
+void testRescanPolicy() {
+    using wsamp::shouldRescanOnDeviceChange;
+    const std::string motu = "MOTU M Series", builtin = "Realtek ASIO";
+    CHECK(shouldRescanOnDeviceChange(false, "", motu, false));         // nothing open: look for it
+    CHECK(shouldRescanOnDeviceChange(true, builtin, motu, true));      // on a fallback: MOTU may be back
+    CHECK(!shouldRescanOnDeviceChange(true, motu, motu, true));        // on the preferred, still there: leave it
+    CHECK(shouldRescanOnDeviceChange(true, motu, motu, false));        // preferred unplugged: fall back
+    CHECK(!shouldRescanOnDeviceChange(true, builtin, "", true));       // no preference, working: leave it
+    CHECK(shouldRescanOnDeviceChange(true, builtin, "", false));       // no preference, device gone
+}
+
 int main() {
+    testRescanPolicy();
     testWsa1Parse();
     testSha1Vectors();
     testBase64Vectors();

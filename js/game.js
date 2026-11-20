@@ -8,6 +8,7 @@ import { Highway } from './highway.js';
 import { renderFretboard, STRING_COLORS } from './fretboard.js';
 import { resumeAudio } from './audio-context.js';
 import { suggestTone, TONE_NAMES, baseToneId } from './tone-suggest.js';
+import { parseBarInput, clampLoopRange, loopTimes, defaultLoopRange } from './loop-range.js';
 
 export class Game {
   constructor(container, ctx, record) {
@@ -58,7 +59,8 @@ export class Game {
     this.tuningToastShown = false;
     this._waitPausedAtEvent = -1;
 
-    this.loop = null; // { barStart, barEnd, t0, t1 }
+    this.loop = null; // active loop { barStart, barEnd, t0, t1 }, or null when the loop is off
+    this.loopRange = null; // last { barStart, barEnd } the user set; kept while the loop is off
     this._userZoomed = false;
     this.pxPerSec = this._computeAutoZoom(this.events);
 
@@ -70,7 +72,11 @@ export class Game {
 
     this._onKeyDown = this._handleKeyDown.bind(this);
     this._onVisChange = this._handleVisibilityChange.bind(this);
-    this._onAmpChange = () => this._syncToneChip(true);
+    // Amp events only refresh the tone UI. The song's tone goes to the amp once per play session (the first time
+    // the amp is online); after that only an explicit pick here sends it, so a tone chosen in the tray, Settings
+    // or the pedalboard is never reverted, and presets broadcasts can't loop back into setPreset.
+    this._tonePushed = false;
+    this._onAmpChange = () => this._syncToneChip(!this._tonePushed);
   }
 
   async mount() {
@@ -143,9 +149,13 @@ export class Game {
 
     window.addEventListener('keydown', this._onKeyDown);
     document.addEventListener('visibilitychange', this._onVisChange);
+    this._onThemeChanged = () => {
+      this._renderNextEventFretboard(this.getTabNow(), null);
+    };
+    window.addEventListener('woodshed:theme-changed', this._onThemeChanged);
     this.ctx.amp?.addEventListener('state', this._onAmpChange);
     this.ctx.amp?.addEventListener('presets', this._onAmpChange);
-    this._syncToneChip(true);
+    this._syncToneChip(!this._tonePushed);
     this._applyGuideTone();
     this._unsubSettings = this.ctx.settings.onChange?.((key, value) => {
       if (key === 'guideTone') {
@@ -181,7 +191,8 @@ export class Game {
     }
     if (this.demoBtnEl) {
       this.demoBtnEl.classList.toggle('btn-primary', this.virtualGuitar);
-      this.demoBtnEl.textContent = this.virtualGuitar ? 'Demo Autoplay: ON' : 'Demo: Watch It Play Itself';
+      this.demoBtnEl.textContent = this.virtualGuitar ? 'Demo: On' : 'Demo';
+      this.demoBtnEl.setAttribute('aria-pressed', String(this.virtualGuitar));
     }
   }
 
@@ -738,16 +749,7 @@ export class Game {
   _loopBars(a, b) {
     const bars = this.song.bars || [];
     if (!bars[a - 1] || !bars[b - 1]) return;
-    this.loop = {
-      barStart: a,
-      barEnd: b,
-      t0: bars[a - 1].t,
-      t1: bars[b - 1].t + bars[b - 1].dur
-    };
-    const inputA = document.getElementById('loop-bar-a');
-    const inputB = document.getElementById('loop-bar-b');
-    if (inputA) inputA.value = String(a);
-    if (inputB) inputB.value = String(b);
+    this._setLoop({ barStart: a, barEnd: b }, true);
     const modalRoot = document.getElementById('modal-root');
     if (modalRoot) modalRoot.classList.add('hidden');
     this.restart();
@@ -973,9 +975,7 @@ export class Game {
   }
 
   _renderUI() {
-    const barOptions = this.song.bars.map((_, idx) => `<option value="${idx + 1}">Bar ${idx + 1}</option>`).join('');
-    const inputLive = this.ctx.input.state === 'live';
-    const showFingering = this.ctx.settings.get('showFingering') !== false;
+    const showFingering = Boolean(this.ctx.settings.get('showFingering'));
     const guideVolInit = Number(this.ctx.settings.get('guideVolume') ?? 0.7);
     const backingVolInit = Number(this.ctx.settings.get('backingVolume') ?? 0.85);
     const totalBars = Math.max(1, this.song.bars.length);
@@ -1006,16 +1006,16 @@ export class Game {
           <div class="judgement-pill" id="hud-judgement" role="status" aria-live="polite">Ready</div>
 
           <div class="hud-actions">
-            ${!inputLive ? `<button type="button" class="btn btn-sm btn-primary" id="play-connect-btn">Connect Guitar</button>` : ''}
-            <button type="button" class="btn btn-sm" id="play-demo-btn">Demo: Watch It Play Itself</button>
+            <div class="hud-position tabular" aria-label="Position">
+              <span id="play-bar-readout">BAR ${String(1).padStart(padLen, '0')} / ${String(totalBars).padStart(padLen, '0')}</span>
+              <span class="hud-position-sep" aria-hidden="true">·</span>
+              <span id="transport-time">0:00 / 0:00</span>
+            </div>
+            <button type="button" class="btn btn-sm" id="play-demo-btn" aria-pressed="false" title="Demo: watch it play itself">Demo</button>
           </div>
         </header>
 
         <section class="play-screen" aria-label="Tab Highway Screen">
-          <div class="play-screen-top">
-            <span id="play-bar-readout">BAR ${String(1).padStart(padLen, '0')} / ${String(totalBars).padStart(padLen, '0')}</span>
-            <span id="transport-time">0:00 / 0:00</span>
-          </div>
           <div class="highway-stage">
             <canvas id="highway-canvas"></canvas>
           </div>
@@ -1028,102 +1028,110 @@ export class Game {
         </section>
 
         <section class="play-deck" aria-label="Amp Control Deck">
-          <div class="deck-transport">
+          <div class="deck-group deck-transport">
             <button type="button" class="play-btn-main" id="btn-play-toggle" aria-label="Play" title="Play / Pause (Space)">
               <svg viewBox="0 0 24 24" width="28" height="28" fill="currentColor" aria-hidden="true"><polygon points="7,5 20,12 7,19"></polygon></svg>
             </button>
             <button type="button" class="btn deck-restart-btn" id="btn-restart" aria-label="Restart" title="Restart (R)">
               <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"></path><path d="M3 3v5h5"></path></svg>
-              <span>Restart</span>
             </button>
-            <div class="deck-loop">
-              <span class="deck-loop-label">Loop</span>
-              <select class="select deck-loop-select" id="loop-bar-a" aria-label="Loop start bar">
-                <option value="">Off</option>
-                ${barOptions}
-              </select>
-              <span class="deck-loop-sep" aria-hidden="true">-</span>
-              <select class="select deck-loop-select" id="loop-bar-b" aria-label="Loop end bar">
-                <option value="">Off</option>
-                ${barOptions}
-              </select>
-              <button type="button" class="btn btn-sm btn-ghost deck-loop-clear" id="btn-clear-loop" aria-label="Clear loop">Clear</button>
-            </div>
           </div>
 
-          <div class="deck-knobs">
-            <div class="amp-knob">
+          <div class="deck-group deck-loop" role="group" aria-label="Loop">
+            <button type="button" class="deck-loop-toggle" id="btn-loop-toggle" aria-pressed="false" title="Loop on/off (L sets it to the current bar)">
+              <span class="deck-loop-led" aria-hidden="true"></span>Loop
+            </button>
+            <label class="deck-loop-field">
+              <span class="deck-loop-label">Bars</span>
+              <input type="number" class="input deck-loop-input tabular" id="loop-bar-a" min="1" max="${totalBars}" step="1" inputmode="numeric" placeholder="1" aria-label="Loop start bar" />
+            </label>
+            <span class="deck-loop-sep" aria-hidden="true">to</span>
+            <input type="number" class="input deck-loop-input tabular" id="loop-bar-b" min="1" max="${totalBars}" step="1" inputmode="numeric" placeholder="${totalBars}" aria-label="Loop end bar" />
+          </div>
+
+          <div class="deck-group deck-speed">
+            <div class="amp-knob amp-knob--inline">
               <div class="amp-knob-dial">
                 <span class="amp-knob-pointer" aria-hidden="true"></span>
                 <input type="range" id="ctrl-speed" min="0.5" max="1.25" step="0.05" value="${this.speed}" aria-label="Speed" />
               </div>
-              <label class="amp-knob-label" for="ctrl-speed">Speed</label>
-              <span class="amp-knob-val tabular" id="ctrl-speed-val">${Math.round(this.speed * 100)}%</span>
-            </div>
-
-            <div class="amp-knob">
-              <div class="amp-knob-dial">
-                <span class="amp-knob-pointer" aria-hidden="true"></span>
-                <input type="range" id="ctrl-guide-vol" min="0" max="1" step="0.05" value="${guideVolInit}" aria-label="Guide Volume" />
+              <div class="amp-knob-text">
+                <label class="amp-knob-label" for="ctrl-speed">Speed</label>
+                <span class="amp-knob-val tabular" id="ctrl-speed-val">${Math.round(this.speed * 100)}%</span>
               </div>
-              <label class="amp-knob-label" for="ctrl-guide-vol">Guide Vol</label>
-              <span class="amp-knob-val tabular" id="ctrl-guide-vol-val">${Math.round(guideVolInit * 100)}%</span>
-            </div>
-
-            <div class="amp-knob">
-              <div class="amp-knob-dial">
-                <span class="amp-knob-pointer" aria-hidden="true"></span>
-                <input type="range" id="ctrl-backing-vol" min="0" max="1" step="0.05" value="${backingVolInit}" aria-label="Backing Volume" />
-              </div>
-              <label class="amp-knob-label" for="ctrl-backing-vol">Backing Vol</label>
-              <span class="amp-knob-val tabular" id="ctrl-backing-vol-val">${Math.round(backingVolInit * 100)}%</span>
-            </div>
-
-            <div class="amp-knob">
-              <div class="amp-knob-dial">
-                <span class="amp-knob-pointer" aria-hidden="true"></span>
-                <input type="range" id="ctrl-zoom" min="140" max="420" step="20" value="${this.pxPerSec}" aria-label="Highway Zoom" />
-              </div>
-              <label class="amp-knob-label" for="ctrl-zoom">Zoom</label>
-              <span class="amp-knob-val tabular" id="ctrl-zoom-val">${Math.round(this.pxPerSec)}px</span>
             </div>
           </div>
 
-          <div class="deck-settings">
+          <div class="deck-group deck-practice">
             <div class="deck-mode-group" role="group" aria-label="Practice Mode">
               <button type="button" class="seg-btn active" data-mode="perform">Perform</button>
-              <button type="button" class="seg-btn" data-mode="wait">Wait for Note</button>
+              <button type="button" class="seg-btn" data-mode="wait" title="Wait for Note (W)">Wait</button>
             </div>
+            <button type="button" class="btn btn-sm" id="btn-metronome" title="Toggle Metronome (M)">Metronome</button>
+          </div>
 
-            <div class="deck-selects">
-              <label class="deck-field">
-                <span class="deck-field-label">Difficulty</span>
-                <select class="select" id="ctrl-level">
-                  <option value="1">Level 1: Roots</option>
-                  <option value="2">Level 2: Backbone</option>
-                  <option value="3">Level 3: Full Song</option>
-                </select>
-              </label>
+          <div class="deck-more">
+            <button type="button" class="btn btn-sm deck-more-btn" id="btn-deck-more" aria-expanded="false" aria-controls="deck-more-panel">
+              More <span class="deck-more-caret" aria-hidden="true">&#9662;</span>
+            </button>
+            <div class="deck-more-panel hidden" id="deck-more-panel" role="dialog" aria-label="More play settings">
+              <div class="deck-more-section">
+                <div class="deck-more-title">Mix and view</div>
+                <div class="deck-knobs">
+                  <div class="amp-knob">
+                    <div class="amp-knob-dial">
+                      <span class="amp-knob-pointer" aria-hidden="true"></span>
+                      <input type="range" id="ctrl-guide-vol" min="0" max="1" step="0.05" value="${guideVolInit}" aria-label="Guide Volume" />
+                    </div>
+                    <label class="amp-knob-label" for="ctrl-guide-vol">Guide Vol</label>
+                    <span class="amp-knob-val tabular" id="ctrl-guide-vol-val">${Math.round(guideVolInit * 100)}%</span>
+                  </div>
+                  <div class="amp-knob">
+                    <div class="amp-knob-dial">
+                      <span class="amp-knob-pointer" aria-hidden="true"></span>
+                      <input type="range" id="ctrl-backing-vol" min="0" max="1" step="0.05" value="${backingVolInit}" aria-label="Backing Volume" />
+                    </div>
+                    <label class="amp-knob-label" for="ctrl-backing-vol">Backing Vol</label>
+                    <span class="amp-knob-val tabular" id="ctrl-backing-vol-val">${Math.round(backingVolInit * 100)}%</span>
+                  </div>
+                  <div class="amp-knob">
+                    <div class="amp-knob-dial">
+                      <span class="amp-knob-pointer" aria-hidden="true"></span>
+                      <input type="range" id="ctrl-zoom" min="140" max="420" step="20" value="${this.pxPerSec}" aria-label="Highway Zoom" />
+                    </div>
+                    <label class="amp-knob-label" for="ctrl-zoom">Zoom</label>
+                    <span class="amp-knob-val tabular" id="ctrl-zoom-val">${Math.round(this.pxPerSec)}px</span>
+                  </div>
+                </div>
+              </div>
 
-              <label class="deck-field">
-                <span class="deck-field-label">Guide Sound</span>
-                <select class="select" id="ctrl-guide-tone">
-                  <option value="match">Match song tone</option>
-                  <option value="clean">${TONE_NAMES.clean || 'Clean'}</option>
-                  ${guideToneOptions}
-                </select>
-              </label>
+              <div class="deck-more-section deck-selects">
+                <label class="deck-field">
+                  <span class="deck-field-label">Difficulty</span>
+                  <select class="select" id="ctrl-level">
+                    <option value="1">Level 1: Roots</option>
+                    <option value="2">Level 2: Backbone</option>
+                    <option value="3">Level 3: Full Song</option>
+                  </select>
+                </label>
+                <label class="deck-field">
+                  <span class="deck-field-label">Guide Sound</span>
+                  <select class="select" id="ctrl-guide-tone">
+                    <option value="match">Match song tone</option>
+                    <option value="clean">${TONE_NAMES.clean || 'Clean'}</option>
+                    ${guideToneOptions}
+                  </select>
+                </label>
+                <label class="deck-field play-tone-chip ${this.ctx.amp?.state === 'online' ? '' : 'hidden'}" id="play-tone-chip" title="">
+                  <span class="deck-field-label" id="play-tone-label">Amp Tone</span>
+                  <select class="select play-tone-select" id="play-tone-select" aria-label="Amp Tone"></select>
+                </label>
+              </div>
 
-              <span class="chip play-tone-chip ${this.ctx.amp?.state === 'online' ? '' : 'hidden'}" id="play-tone-chip" title="">
-                <span id="play-tone-label">Tone</span>
-                <select class="select play-tone-select" id="play-tone-select" aria-label="Amp Tone"></select>
-              </span>
-            </div>
-
-            <div class="deck-toggles">
-              <button type="button" class="btn btn-sm" id="btn-metronome" title="Toggle Metronome (M)">Metronome</button>
-              <button type="button" class="btn btn-sm" id="btn-countin">Count-In</button>
-              <button type="button" class="btn btn-sm" id="btn-fingering">Fingering</button>
+              <div class="deck-more-section deck-toggles">
+                <button type="button" class="btn btn-sm" id="btn-countin">Count-In</button>
+                <button type="button" class="btn btn-sm" id="btn-fingering" title="Show the next notes on a small fretboard under the highway">Fingering</button>
+              </div>
             </div>
           </div>
         </section>
@@ -1142,18 +1150,6 @@ export class Game {
       else this.start();
     });
     this.container.querySelector('#btn-restart')?.addEventListener('click', () => this.restart());
-
-    this.container.querySelector('#play-connect-btn')?.addEventListener('click', async (e) => {
-      try {
-        await this.ctx.input.start({
-          deviceId: this.ctx.settings.get('inputDeviceId'),
-          channel: this.ctx.settings.get('inputChannel')
-        });
-        e.target.remove();
-      } catch (err) {
-        this.ctx.toast(err.message, 'error');
-      }
-    });
 
     this.demoBtnEl?.addEventListener('click', () => {
       this._setVirtualGuitar(!this.virtualGuitar);
@@ -1210,25 +1206,66 @@ export class Game {
       if (valEl) valEl.textContent = `${Math.round(this.pxPerSec)}px`;
     });
 
-    const updateLoopFromPickers = () => {
-      const a = parseInt(this.container.querySelector('#loop-bar-a').value, 10);
-      const b = parseInt(this.container.querySelector('#loop-bar-b').value, 10);
-      if (Number.isInteger(a) && a >= 1 && a <= this.song.bars.length) {
-        const endBarIdx = Number.isInteger(b) && b >= a ? Math.min(this.song.bars.length, b) : a;
-        const barA = this.song.bars[a - 1];
-        const barB = this.song.bars[endBarIdx - 1];
-        this.loop = { barStart: a, barEnd: endBarIdx, t0: barA.t, t1: barB.t + barB.dur };
-      } else {
-        this.loop = null;
+    // Loop: typed bar numbers (Enter or leaving the box applies, bad values are clamped) and an on/off toggle that keeps the range.
+    const loopA = this.container.querySelector('#loop-bar-a');
+    const loopB = this.container.querySelector('#loop-bar-b');
+    const applyTypedLoop = (edited) => {
+      const total = this.song.bars.length;
+      const a = parseBarInput(loopA.value, total);
+      const b = parseBarInput(loopB.value, total);
+      if (a === null && b === null && !this.loopRange) {
+        this._syncLoopUI();
+        return;
       }
+      this._setLoop(clampLoopRange(a ?? NaN, b ?? NaN, total, edited, this.loopRange), true);
     };
+    for (const [el, which] of [[loopA, 'start'], [loopB, 'end']]) {
+      el?.addEventListener('keydown', (e) => {
+        if (e.key === 'Enter') {
+          e.preventDefault();
+          applyTypedLoop(which);
+          el.select();
+        } else if (e.key === 'Escape') {
+          e.preventDefault();
+          this._syncLoopUI();
+          el.blur();
+        }
+      });
+      el?.addEventListener('change', () => applyTypedLoop(which));
+    }
+    this.container.querySelector('#btn-loop-toggle')?.addEventListener('click', () => {
+      if (this.loop) {
+        this._setLoop(this.loopRange, false);
+      } else {
+        const tabNow = this.getTabNow();
+        let cur = 1;
+        this.song.bars.forEach((b, i) => { if (tabNow >= b.t) cur = i + 1; });
+        this._setLoop(this.loopRange || defaultLoopRange(cur, this.song.bars.length), true);
+      }
+    });
+    this._syncLoopUI();
 
-    this.container.querySelector('#loop-bar-a')?.addEventListener('change', updateLoopFromPickers);
-    this.container.querySelector('#loop-bar-b')?.addEventListener('change', updateLoopFromPickers);
-    this.container.querySelector('#btn-clear-loop')?.addEventListener('click', () => {
-      this.loop = null;
-      this.container.querySelector('#loop-bar-a').value = '';
-      this.container.querySelector('#loop-bar-b').value = '';
+    // "More" popover: the settings you set once per session live here.
+    const moreBtn = this.container.querySelector('#btn-deck-more');
+    const morePanel = this.container.querySelector('#deck-more-panel');
+    const setMore = (open) => {
+      morePanel?.classList.toggle('hidden', !open);
+      moreBtn?.setAttribute('aria-expanded', String(open));
+      moreBtn?.classList.toggle('is-open', open);
+    };
+    moreBtn?.addEventListener('click', () => setMore(morePanel.classList.contains('hidden')));
+    this._onDocPointerDown = (e) => {
+      if (!morePanel || morePanel.classList.contains('hidden')) return;
+      if (morePanel.contains(e.target) || moreBtn.contains(e.target)) return;
+      setMore(false);
+    };
+    document.addEventListener('pointerdown', this._onDocPointerDown);
+    morePanel?.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape') {
+        e.stopPropagation();
+        setMore(false);
+        moreBtn?.focus();
+      }
     });
 
     this.container.querySelector('#btn-metronome')?.addEventListener('click', () => {
@@ -1245,7 +1282,7 @@ export class Game {
     });
 
     this.container.querySelector('#btn-fingering')?.addEventListener('click', () => {
-      const next = !(this.ctx.settings.get('showFingering') !== false);
+      const next = !this.ctx.settings.get('showFingering');
       this.ctx.settings.set('showFingering', next);
       if (next) this._lastMiniFbKey = '';
       this._syncControlsUI();
@@ -1256,6 +1293,7 @@ export class Game {
       this.record.tone = chosen;
       await this.ctx.saveRecord(this.record);
       if (this.ctx.amp?.state === 'online') {
+        this._tonePushed = true;
         this.ctx.amp.setPreset(chosen);
       }
       this._syncToneChip(false);
@@ -1375,16 +1413,46 @@ export class Game {
     const isSuggested = !this.record.tone || this.record.tone === suggestedId;
 
     chip.title = this.toneSuggestion.reasons.join(' · ');
-    labelEl.textContent = isSuggested ? `Tone: ${activeName} (suggested)` : `Tone: ${activeName}`;
+    labelEl.textContent = 'Amp Tone';
+    chip.title = `${isSuggested ? `${activeName} is suggested for this song` : `Your choice: ${activeName}`}${chip.title ? ` (${chip.title})` : ''}`;
 
-    selEl.innerHTML = Array.from(map.entries()).map(([id, name]) => {
-      const suffix = id === suggestedId ? ' (suggested)' : '';
-      return `<option value="${id}" ${id === activeTone ? 'selected' : ''}>${name}${suffix}</option>`;
-    }).join('');
+    // Rebuild the options only when the list itself changed (not on every presets broadcast).
+    const listKey = JSON.stringify([suggestedId, ...map.entries()]);
+    if (this._toneListKey !== listKey) {
+      this._toneListKey = listKey;
+      selEl.innerHTML = Array.from(map.entries()).map(([id, name]) => {
+        const suffix = id === suggestedId ? ' (suggested)' : '';
+        return `<option value="${id}">${name}${suffix}</option>`;
+      }).join('');
+    }
+    if (map.has(activeTone) && selEl.value !== activeTone && document.activeElement !== selEl) selEl.value = activeTone;
 
-    if (sendToAmp && activeTone) {
+    if (sendToAmp && activeTone && !this._tonePushed) {
+      this._tonePushed = true;
       this.ctx.amp.setPreset(activeTone);
     }
+  }
+
+  /** Set the loop range (1-based bars) and whether it is on. Off keeps the range for next time. */
+  _setLoop(range, on) {
+    const total = this.song.bars.length;
+    this.loopRange = range ? clampLoopRange(range.barStart, range.barEnd, total, 'start') : null;
+    this.loop = on && this.loopRange ? loopTimes(this.song.bars, this.loopRange.barStart, this.loopRange.barEnd) : null;
+    this._syncLoopUI();
+  }
+
+  _syncLoopUI() {
+    const a = this.container.querySelector('#loop-bar-a');
+    const b = this.container.querySelector('#loop-bar-b');
+    const toggle = this.container.querySelector('#btn-loop-toggle');
+    const on = Boolean(this.loop);
+    if (a) a.value = this.loopRange ? String(this.loopRange.barStart) : '';
+    if (b) b.value = this.loopRange ? String(this.loopRange.barEnd) : '';
+    if (toggle) {
+      toggle.classList.toggle('is-on', on);
+      toggle.setAttribute('aria-pressed', String(on));
+    }
+    this.container.querySelector('.deck-loop')?.classList.toggle('is-off', !on);
   }
 
   _syncControlsUI() {
@@ -1435,7 +1503,7 @@ export class Game {
       ciBtn.setAttribute('aria-pressed', String(ciOn));
     }
 
-    const showFingering = this.ctx.settings.get('showFingering') !== false;
+    const showFingering = Boolean(this.ctx.settings.get('showFingering'));
     const fbWrap = this.container.querySelector('#play-fretboard-wrap');
     if (fbWrap) fbWrap.classList.toggle('hidden', !showFingering);
     const fbBtn = this.container.querySelector('#btn-fingering');
@@ -1480,7 +1548,7 @@ export class Game {
   }
 
   _renderNextEventFretboard(tabNow, activeHeard) {
-    if (this.ctx.settings.get('showFingering') === false) return;
+    if (!this.ctx.settings.get('showFingering')) return;
     const nextEv = this.events.find((ev, idx) => this.eventStates[idx] !== 1 && ev.t >= tabNow - 0.15);
     const keyStr = `${nextEv ? nextEv.index : -1}:${activeHeard ? activeHeard.midi : 0}`;
     if (this._lastMiniFbKey === keyStr) return;
@@ -1574,10 +1642,7 @@ export class Game {
       const tabNow = this.getTabNow();
       const barIdx = this.song.bars.findIndex((b) => tabNow >= b.t && tabNow < b.t + b.dur);
       if (barIdx >= 0) {
-        const bar = this.song.bars[barIdx];
-        this.loop = { barStart: barIdx + 1, barEnd: barIdx + 1, t0: bar.t, t1: bar.t + bar.dur };
-        this.container.querySelector('#loop-bar-a').value = String(barIdx + 1);
-        this.container.querySelector('#loop-bar-b').value = String(barIdx + 1);
+        this._setLoop({ barStart: barIdx + 1, barEnd: barIdx + 1 }, true);
       }
     } else if (e.key === 'ArrowLeft') {
       e.preventDefault();
@@ -1600,6 +1665,8 @@ export class Game {
     this._unmounted = true;
     if (this._rafId) cancelAnimationFrame(this._rafId);
     window.removeEventListener('keydown', this._onKeyDown);
+    if (this._onThemeChanged) window.removeEventListener('woodshed:theme-changed', this._onThemeChanged);
+    if (this._onDocPointerDown) document.removeEventListener('pointerdown', this._onDocPointerDown);
     document.removeEventListener('visibilitychange', this._onVisChange);
     this.ctx.amp?.removeEventListener('state', this._onAmpChange);
     this.ctx.amp?.removeEventListener('presets', this._onAmpChange);

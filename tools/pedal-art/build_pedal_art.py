@@ -18,7 +18,7 @@ s = open(SRC, encoding='utf-8').read()
 
 # design order -> amp block type
 TYPES = {1: 'amp', 2: 'nam', 3: 'reverb', 4: 'mixer', 5: 'cab', 6: 'ir', 7: 'volume', 8: 'eq', 9: 'overdrive',
-         10: 'chorus', 11: 'phaser', 12: 'tremolo', 13: 'flanger', 14: 'delay', 15: 'autowah'}
+         10: 'chorus', 11: 'phaser', 12: 'tremolo', 13: 'flanger', 14: 'delay', 15: 'autowah', 16: 'metal'}
 # pedal knob/slider name -> amp parameter key ('!' = the art runs the other way, e.g. a longer delay moves slower)
 CONTROLS = {
     'amp': {'gain': 'gain', 'bass': 'bass', 'mid': 'mid', 'treble': 'treble', 'pres': 'presence'},
@@ -30,8 +30,9 @@ CONTROLS = {
     'flanger': {'rate': 'rate', 'depth': 'depth', 'swoosh': 'feedback'},
     'delay': {'time': '!time', 'repeats': 'feedback', 'tone': 'tone', 'mix': 'mix'},
     'autowah': {'wah': 'wah', 'level': 'level', 'mix': 'mix'},
+    'metal': {'gain': 'gain', 'tight': 'tight', 'low': 'low', 'mid': 'mid', 'high': 'high', 'level': 'level', 'gate': 'gate'},
 }
-THUMB_POS = {'nam': 'center 18%', 'overdrive': 'center 22%', 'reverb': 'center 45%', 'eq': 'center 40%'}
+THUMB_POS = {'nam': 'center 18%', 'overdrive': 'center 22%', 'reverb': 'center 45%', 'eq': 'center 40%', 'metal': 'center 40%'}
 
 written = {}
 def save_uri(m, tag):
@@ -68,6 +69,11 @@ for n, typ in TYPES.items():
         body = 'function(cv){' + body[len('(function(){'):-len('})();')] + '}'
         body = body.replace('function frame(now){raf=0;if(!on)return;', 'function frame(now){raf=0;if(!on||!cv.isConnected)return;')
         assert 'cv.isConnected' in body, typ
+        # one shared, ~20 fps clock for every canvas (see artRaf in the runtime) instead of a rAF loop per canvas
+        assert 'cancelAnimationFrame' not in body, typ
+        body = body.replace('requestAnimationFrame(', 'artRaf(')
+        assert body.count('now-last<30') == 1, typ
+        body = body.replace('now-last<30', 'now-last<45')
         inits.append((cls, body))
         return ''
     html = re.sub(r'<script>(.*?)</script>', grab, html, flags=re.S)
@@ -113,6 +119,30 @@ const MOTION = {"a-swing":["gain",17,12],"a-eyes":["level",11,8],"a-tw":["size",
   "a-fleck":["low",7,4],"a-rattle":["level",5.5,4],"a-chorus":["rate",6,4.5],"fx-spin":["rate",34,28],"a-hoof":["speed",3.6,2.6],
   "a-roll":["rate",4.2,3.2],"a-kick":["wah",5.2,3.6],"a-spur":["wah",5.2,3.6]};
 
+// Shared animation clock for the pedals' canvases: one rAF loop for all of them, ticking at about 20 fps,
+// and none at all while the board is being panned or zoomed (setPedalArtPaused) or nothing is visible.
+const ART_FRAME_MS = 48;
+const artQ = new Set();
+let artLoop = 0, artLast = 0, artPaused = false;
+function artRaf(fn) { artQ.add(fn); if (!artLoop && !artPaused) artLoop = requestAnimationFrame(artTick); return 1; }
+function artTick(now) {
+  artLoop = 0;
+  if (artPaused || !artQ.size) return;
+  if (now - artLast < ART_FRAME_MS - 4) { artLoop = requestAnimationFrame(artTick); return; }
+  artLast = now;
+  const t0 = performance.now();
+  const fns = [...artQ]; artQ.clear();
+  for (const f of fns) { try { f(now); } catch (e) { console.error(e); } }
+  artStats.frames++; artStats.ms += performance.now() - t0;
+  if (artQ.size && !artLoop) artLoop = requestAnimationFrame(artTick);
+}
+// Readout for checking the art's cost: canvas frames drawn and the script time they took.
+export const artStats = { frames: 0, ms: 0 };
+export function setPedalArtPaused(paused) {
+  artPaused = !!paused;
+  if (!artPaused && artQ.size && !artLoop) artLoop = requestAnimationFrame(artTick);
+}
+
 export function pedalSize(type) { const p = PEDALS[type]; return p ? { w: p.w, h: p.h } : null; }
 export function hasPedalArt(type) { return Object.prototype.hasOwnProperty.call(PEDALS, type); }
 export function pedalThumb(type) { return hasPedalArt(type) ? new URL('../' + PEDALS[type].thumb, import.meta.url).href : null; }
@@ -123,7 +153,8 @@ export function pedalArtHtml(type) {
   return `<div class="pa" data-pa-type="${type}" style="width:${p.w}px;height:${p.h}px"><div class="pa-scale">${p.html}</div></div>`;
 }
 
-// Wires a rendered pedal to the amp. opts: { type, specs, params, enabled, onParam(key, value), onToggle() }
+// Wires a rendered pedal to the amp. opts: { type, specs, params, enabled, scale, onParam(key, value), onToggle() }
+// scale: a fixed size factor; without it the pedal fits its parent's width (and follows it with a ResizeObserver).
 // Returns { set(key, value), setEnabled(on), destroy() }.
 export function mountPedalArt(root, opts) {
   const p = PEDALS[opts.type];
@@ -134,16 +165,19 @@ export function mountPedalArt(root, opts) {
   const controls = CONTROLS[opts.type] || {};
   const byParam = new Map();      // amp key -> [{name, el, slider, invert}]
 
-  function fit() {
-    const avail = root.parentElement ? root.parentElement.clientWidth : p.w;
-    const k = Math.min(1, avail / p.w);
+  function fit(k) {
     scaleEl.style.transform = `scale(${k})`;
     root.style.width = `${p.w * k}px`;
     root.style.height = `${p.h * k}px`;
   }
-  fit();
-  const ro = new ResizeObserver(() => requestAnimationFrame(fit));
-  if (root.parentElement) ro.observe(root.parentElement);
+  let ro = null;
+  if (opts.scale > 0) fit(opts.scale);
+  else {
+    const fitParent = () => fit(Math.min(1, (root.parentElement ? root.parentElement.clientWidth : p.w) / p.w));
+    fitParent();
+    ro = new ResizeObserver(() => requestAnimationFrame(fitParent));
+    if (root.parentElement) ro.observe(root.parentElement);
+  }
 
   const norm = (spec, v, inv) => {
     const n = (v - spec.min) / ((spec.max - spec.min) || 1);
@@ -222,6 +256,7 @@ export function mountPedalArt(root, opts) {
     const cur = Number.isFinite(opts.params?.[spec.key]) ? opts.params[spec.key] : spec.def;
     show(c, norm(spec, cur, invert), true);
     handle.addEventListener('pointerdown', (e) => {
+      if (e.button !== 0) return;   // middle-drag pans the board, right-click opens its menu
       e.preventDefault(); e.stopPropagation(); handle.focus(); handle.setPointerCapture(e.pointerId);
       const groove = slider ? el.parentElement : null;
       const y0 = e.clientY, n0 = +el.dataset.v;
@@ -233,7 +268,11 @@ export function mountPedalArt(root, opts) {
       const up = () => { handle.removeEventListener('pointermove', move); handle.removeEventListener('pointerup', up); };
       handle.addEventListener('pointermove', move); handle.addEventListener('pointerup', up);
     });
-    handle.addEventListener('wheel', (e) => { e.preventDefault(); e.stopPropagation(); userSet(c, +el.dataset.v - Math.sign(e.deltaY) * 0.05); }, { passive: false });
+    // The wheel turns a knob only once it has focus (clicked or tabbed to); otherwise it zooms/pans the board.
+    handle.addEventListener('wheel', (e) => {
+      if (document.activeElement !== handle || e.ctrlKey || e.metaKey || !e.deltaY) return;
+      e.preventDefault(); e.stopPropagation(); userSet(c, +el.dataset.v - Math.sign(e.deltaY) * 0.05);
+    }, { passive: false });
     handle.addEventListener('keydown', (e) => {
       const d = { ArrowUp: 0.05, ArrowRight: 0.05, ArrowDown: -0.05, ArrowLeft: -0.05 }[e.key];
       if (d) { e.preventDefault(); userSet(c, +el.dataset.v + d); }
@@ -245,7 +284,7 @@ export function mountPedalArt(root, opts) {
     fs.setAttribute('role', 'button'); fs.tabIndex = 0;
     fs.setAttribute('aria-label', 'Bypass');
     const press = (e) => { e.preventDefault(); e.stopPropagation(); if (opts.onToggle) opts.onToggle(); };
-    fs.addEventListener('pointerdown', (e) => e.stopPropagation());
+    fs.addEventListener('pointerdown', (e) => { if (e.button === 0) e.stopPropagation(); });
     fs.addEventListener('click', press);
     fs.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') press(e); });
   }
@@ -258,7 +297,7 @@ export function mountPedalArt(root, opts) {
       for (const c of byParam.get(key) || []) show(c, norm(c.spec, value, c.invert), false);
     },
     setEnabled(on) { root.classList.toggle('pa-off', !on); },
-    destroy() { ro.disconnect(); root.remove(); }
+    destroy() { if (ro) ro.disconnect(); root.remove(); }
   };
 }
 '''

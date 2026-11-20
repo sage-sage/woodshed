@@ -1,6 +1,6 @@
-import { makeSong, TUNINGS } from './song.js';
+import { makeSong, TUNINGS, bendFromPoints, techniqueFields } from './song.js';
 
-const STRING_LINE_RE = /^\s*([A-Ga-g][#b]?\d?)?\s*(\|\||\|:|\||:)?([0-9hHpPsbBrvxX~\/\\\(\)<>|\-:\.\*\s]{5,})$/;
+const STRING_LINE_RE = /^\s*([A-Ga-g][#b]?\d?)?\s*(\|\||\|:|\||:)?([0-9hHpPsSbBrRvxX~\/\\\(\)<>|\-:\.\*\s½¼¾]{5,})$/;
 
 function isTabLine(rawLine) {
   const line = rawLine.trimEnd();
@@ -252,30 +252,36 @@ function splitSystemIntoBars(systemLines, pmLine) {
   };
 }
 
-function mapTechChar(ch) {
-  switch (ch) {
-    case 'h':
-    case 'H':
-      return 'h';
-    case 'p':
-    case 'P':
-      return 'p';
-    case '/':
-    case '\\':
-    case 's':
-    case 'S':
-      return 'slide';
-    case 'b':
-    case 'B':
-    case 'r':
-    case 'R':
-      return 'bend';
-    case '~':
-    case 'v':
-      return 'vib';
-    default:
-      return '';
+// Bend written after a fret: "7b9", "7b(9)", "7b½", "7b1/2", "7bfull", "7br", "7b9r7", "7pb9" (pre-bend), "7pb9r7".
+const BEND_RE = /^(p?)b(?:\((\d{1,2})\)|(1½|1 1\/2|1-1\/2|½|1\/2|¼|1\/4|3\/4|full|f(?![a-z]))|(\d{1,2}))?(r(?:\((\d{1,2})\)|(\d{1,2}))?)?/i;
+const BEND_WORDS = { '1½': 3, '1 1/2': 3, '1-1/2': 3, '½': 1, '1/2': 1, '¼': 0.5, '1/4': 0.5, '3/4': 1.5, full: 2, f: 2 };
+
+function bendShape(semis, pre, release) {
+  if (pre && release) return bendFromPoints([{ pos: 0, semis }, { pos: 1, semis: 0 }]);
+  if (pre) return bendFromPoints([{ pos: 0, semis }, { pos: 1, semis }]);
+  if (release) return bendFromPoints([{ pos: 0, semis: 0 }, { pos: 0.35, semis }, { pos: 0.65, semis }, { pos: 1, semis: 0 }]);
+  return bendFromPoints([{ pos: 0, semis: 0 }, { pos: 0.35, semis }, { pos: 1, semis }]);
+}
+
+function parseBendAfter(rest, fret) {
+  const m = BEND_RE.exec(rest);
+  if (!m) return null;
+  let semis = 2;
+  const target = m[2] !== undefined ? m[2] : m[4];
+  if (target !== undefined) {
+    // "12b14" bends fret 12 up to the pitch of fret 14: the 14 is a target, not another note.
+    const t = parseInt(target, 10);
+    semis = t > fret && t - fret <= 5 ? t - fret : 2;
+  } else if (m[3] !== undefined) {
+    semis = BEND_WORDS[m[3].toLowerCase()] || 2;
   }
+  return { consumed: m[0].length, ...bendShape(semis, Boolean(m[1]), Boolean(m[5])) };
+}
+
+/** Index of the next character at or after `from` that is not a dash, or -1. */
+function nextNonDash(str, from) {
+  for (let k = from; k < str.length; k++) if (str[k] !== '-') return k;
+  return -1;
 }
 
 function parseStringBarNotes(str, pmSlice, stringIndex, tuningMidi, capo, barStartSec, barDurSec) {
@@ -283,17 +289,64 @@ function parseStringBarNotes(str, pmSlice, stringIndex, tuningMidi, capo, barSta
   const notes = [];
   let i = 0;
   let pendingTech = '';
+  let pendingSlideIn = '';
+  let lastEnd = -1; // column just after the last note
+
+  const isPmAt = (col) => pmSlice && (pmSlice[col] === '-' || pmSlice[col] === '.' || /P|M/i.test(pmSlice[col]));
+  const push = (note, endCol) => {
+    if (pendingSlideIn && !note.dead) note.slideIn = pendingSlideIn;
+    if (!note.tech && pendingTech) note.tech = pendingTech;
+    pendingTech = '';
+    pendingSlideIn = '';
+    notes.push(note);
+    lastEnd = endCol;
+  };
 
   while (i < str.length) {
     const ch = str[i];
 
-    if (/[hHpPsSbBrRv~\/\\]/.test(ch)) {
-      const mapped = mapTechChar(ch);
-      if (mapped) {
-        pendingTech = mapped;
-        if ((mapped === 'vib' || mapped === 'bend') && notes.length > 0 && !notes[notes.length - 1].tech) {
-          notes[notes.length - 1].tech = mapped;
-          pendingTech = '';
+    if (ch === '/' || ch === '\\' || ch === 's' || ch === 'S') {
+      // A slide: between two notes it connects them ("5/7", "7\5", "5s7", "5-/-7"); with no note before it,
+      // it slides into the next note ("/7" from below, "\7" from above); with no note after, off the last one.
+      const prev = notes[notes.length - 1];
+      // At most one dash on either side: "5-/-7" connects, "7----\9" slides into the 9 from above.
+      const prevTouching = Boolean(prev) && lastEnd >= 0 && /^-?$/.test(str.slice(lastEnd, i));
+      const nx = nextNonDash(str, i + 1);
+      const nextIsNote = nx >= 0 && nx <= i + 2 && /[\d(<]/.test(str[nx]);
+      if (prevTouching && nextIsNote) pendingTech = 'slide';
+      else if (nextIsNote) pendingSlideIn = ch === '\\' ? 'above' : 'below';
+      else if (prevTouching && !prev.dead) prev.slideOut = ch === '/' ? 'up' : 'down';
+      i++;
+      continue;
+    }
+
+    if (/[hHpP]/.test(ch)) {
+      pendingTech = ch.toLowerCase();
+      i++;
+      continue;
+    }
+
+    if (/[bBrRv~]/.test(ch)) {
+      // Marks written apart from the fret, e.g. "(7)b9" or "7 ~": they belong to the note before.
+      const prev = notes[notes.length - 1];
+      if (prev && !prev.dead) {
+        if (/[v~]/.test(ch)) {
+          if (!prev.tech) prev.tech = 'vib';
+          else if (prev.tech !== 'vib') prev.vibrato = true;
+        } else if (/[bB]/.test(ch)) {
+          const b = parseBendAfter(str.slice(i), prev.fret);
+          if (b) {
+            const { consumed, ...facts } = b;
+            Object.assign(prev, facts);
+            if (!prev.tech) prev.tech = 'bend';
+            i += consumed;
+            continue;
+          }
+        } else if (prev.bend) {
+          prev.release = true;
+          const m = /^r(?:\(\d{1,2}\)|\d{1,2})?/i.exec(str.slice(i));
+          i += m[0].length;
+          continue;
         }
       }
       i++;
@@ -301,18 +354,16 @@ function parseStringBarNotes(str, pmSlice, stringIndex, tuningMidi, capo, barSta
     }
 
     if (ch === 'x' || ch === 'X') {
-      const t = barStartSec + (i / width) * barDurSec;
-      notes.push({
-        t,
+      push({
+        t: barStartSec + (i / width) * barDurSec,
         col: i,
         string: stringIndex,
         fret: 0,
         midi: tuningMidi + capo,
-        tech: pendingTech || '',
+        tech: '',
         tie: false,
         dead: true
-      });
-      pendingTech = '';
+      }, i + 1);
       i++;
       continue;
     }
@@ -326,20 +377,17 @@ function parseStringBarNotes(str, pmSlice, stringIndex, tuningMidi, capo, barSta
           const fret = parseInt(inner, 10);
           if (fret <= 24) {
             const col = i + 1;
-            const t = barStartSec + (col / width) * barDurSec;
             const isHarm = ch === '<';
-            const isPm = pmSlice && (pmSlice[col] === '-' || pmSlice[col] === '.' || /P|M/i.test(pmSlice[col]));
-            notes.push({
-              t,
+            push({
+              t: barStartSec + (col / width) * barDurSec,
               col,
               string: stringIndex,
               fret,
               midi: tuningMidi + capo + fret,
-              tech: isHarm ? 'harm' : (pendingTech || (isPm ? 'pm' : '')),
+              tech: isHarm ? 'harm' : (pendingTech || (isPmAt(col) ? 'pm' : '')),
               tie: false,
               dead: false
-            });
-            pendingTech = '';
+            }, closeIdx + 1);
             i = closeIdx + 1;
             continue;
           }
@@ -360,26 +408,29 @@ function parseStringBarNotes(str, pmSlice, stringIndex, tuningMidi, capo, barSta
       }
 
       let postTech = '';
-      let bend = 0;
-      const afterIdx = i + consumed;
-      if (afterIdx < str.length && /[~v]/.test(str[afterIdx])) {
+      let extra = {};
+      const rest = str.slice(i + consumed);
+      if (/^[~v]/.test(rest)) {
         postTech = 'vib';
-      } else if (afterIdx < str.length && /[bB]/.test(str[afterIdx])) {
-        postTech = 'bend';
-        // "12b14" bends fret 12 up to the pitch of fret 14: the 14 is a target, not another note.
-        // "7b" alone is taken as a whole-step bend; "7b9r7" (bend and release) is still one note.
-        const m = /^[bB](\d{1,2})?(?:[rR](\d{1,2})?)?/.exec(str.slice(afterIdx));
-        const target = m[1] !== undefined ? parseInt(m[1], 10) : fret + 2;
-        bend = target > fret && target - fret <= 5 ? target - fret : 2;
-        consumed += m[0].length;
+        consumed += 1;
+      } else if (/^p?b/i.test(rest)) {
+        const b = parseBendAfter(rest, fret);
+        if (b) {
+          const { consumed: used, ...facts } = b;
+          postTech = 'bend';
+          extra = facts;
+          consumed += used;
+          if (/^[~v]/.test(str.slice(i + consumed))) {
+            extra.vibrato = true;
+            consumed += 1;
+          }
+        }
       }
 
-      const isPm = pmSlice && (pmSlice[col] === '-' || pmSlice[col] === '.' || /P|M/i.test(pmSlice[col]));
-      const tech = pendingTech || postTech || (isPm ? 'pm' : '');
-      const t = barStartSec + (col / width) * barDurSec;
-
-      notes.push({
-        t,
+      const tech = pendingTech || postTech || (isPmAt(col) ? 'pm' : '');
+      if (pendingTech && postTech === 'vib') extra.vibrato = true;
+      push({
+        t: barStartSec + (col / width) * barDurSec,
         col,
         string: stringIndex,
         fret,
@@ -387,10 +438,8 @@ function parseStringBarNotes(str, pmSlice, stringIndex, tuningMidi, capo, barSta
         tech,
         tie: false,
         dead: false,
-        ...(bend ? { bend } : {})
-      });
-
-      pendingTech = '';
+        ...extra
+      }, i + consumed);
       i += consumed;
       continue;
     }
@@ -520,7 +569,7 @@ export function parseAsciiTab(text, opts = {}) {
         tech: cur.tech,
         tie: cur.tie,
         dead: cur.dead,
-        ...(cur.bend ? { bend: cur.bend } : {})
+        ...techniqueFields(cur)
       });
     }
   }

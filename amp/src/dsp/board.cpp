@@ -19,6 +19,7 @@
 #include "builtin_amp.h"
 #include "cab.h"
 #include "effects.h"
+#include "metal.h"
 #include "nam_slot.h"
 #include "wav.h"
 
@@ -107,6 +108,24 @@ const std::vector<BlockTypeSpec>& blockCatalog() {
             {
                 {"drive", "Drive", 0.0f, 1.0f, 0.4f, 0.01f, "", {}},
                 {"level", "Level", -24.0f, 12.0f, -6.0f, 0.5f, "dB", {}},
+            },
+        },
+        {
+            BlockType::Metal,
+            "metal",
+            "Metal distortion",
+            "drive",
+            1,
+            false,
+            nullptr,
+            {
+                {"gain", "Gain", 0.0f, 10.0f, 7.0f, 0.1f, "", {}},
+                {"tight", "Tight", 40.0f, 250.0f, 110.0f, 1.0f, "Hz", {}},
+                {"low", "Low", -12.0f, 12.0f, 2.0f, 0.5f, "dB", {}},
+                {"mid", "Mid", -15.0f, 12.0f, -4.0f, 0.5f, "dB", {}},
+                {"high", "High", -12.0f, 12.0f, 2.0f, 0.5f, "dB", {}},
+                {"level", "Level", -36.0f, 6.0f, -12.0f, 0.5f, "dB", {}},
+                {"gate", "Gate", -80.0f, -30.0f, -62.0f, 1.0f, "dB", {}},
             },
         },
         {
@@ -1057,6 +1076,48 @@ private:
     bool applied_ = false;
 };
 
+class MetalBlock final : public Block {
+public:
+    explicit MetalBlock(std::string uid) : Block(BlockType::Metal, std::move(uid)) {}
+
+    void prepare(double sampleRate, int maxBlock) override {
+        blockPrepared(sampleRate, maxBlock);
+        smoother_.snap(targets_, spec().params.size());
+        metal_.setParams(current());
+        metal_.prepare(sampleRate, maxBlock);
+    }
+
+    void reset() noexcept override {
+        smoother_.snap(targets_, spec().params.size());
+        metal_.setParams(current());
+        metal_.reset();
+    }
+
+    void process(float* io, int n) noexcept override {
+        if (io == nullptr || n <= 0) return;
+        if (smoother_.smooth(targets_, spec().params, preparedRate_, n, false)) {
+            metal_.setParams(current());
+        }
+        metal_.process(io, n);
+    }
+
+private:
+    MetalParams current() const noexcept {
+        MetalParams p;
+        p.gain = smoother_.cur[0];
+        p.tightHz = smoother_.cur[1];
+        p.lowDb = smoother_.cur[2];
+        p.midDb = smoother_.cur[3];
+        p.highDb = smoother_.cur[4];
+        p.levelDb = smoother_.cur[5];
+        p.gateDb = smoother_.cur[6];
+        return p;
+    }
+
+    MetalDistortion metal_;
+    ParamSmoother smoother_;
+};
+
 } // namespace
 
 std::shared_ptr<Block> makeBlock(BlockType type, const std::string& uid) {
@@ -1076,6 +1137,7 @@ std::shared_ptr<Block> makeBlock(BlockType type, const std::string& uid) {
         case BlockType::Reverb:    return std::make_shared<ReverbBlock>(uid);
         case BlockType::Mixer:     return std::make_shared<MixerBlock>(uid);
         case BlockType::Volume:    return std::make_shared<VolumeBlock>(uid);
+        case BlockType::Metal:     return std::make_shared<MetalBlock>(uid);
     }
     return std::make_shared<AmpBlock>(uid);
 }

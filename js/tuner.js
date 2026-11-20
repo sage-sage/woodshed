@@ -1,6 +1,7 @@
 import { TUNINGS, midiToName } from './song.js';
 import { centsOff } from './dsp.js';
 import { resumeAudio } from './audio-context.js';
+import { createTunerSettler } from './tuner-settle.js';
 
 export function mount(container, ctx) {
   const songTuning = ctx.record?.song?.tuning;
@@ -23,7 +24,7 @@ export function mount(container, ctx) {
   let lockedStringIndex = null; // null = auto-select nearest string
   let perStringState = currentTuning.map(() => ({ cents: null, status: 'unmeasured' }));
 
-  const recentFreqs = [];
+  const settler = createTunerSettler();
   let heldReading = null;
   let heldUntilSec = 0;
   let needleAngleCents = 0;
@@ -219,13 +220,12 @@ export function mount(container, ctx) {
     const a4 = ctx.settings.get('a4') || 440;
     const nowSec = frame.t;
 
-    if (frame.freq > 0 && frame.clarity >= 0.8) {
-      recentFreqs.push(frame.freq);
-      if (recentFreqs.length > 5) recentFreqs.shift();
-      const sorted = [...recentFreqs].sort((a, b) => a - b);
-      const medianFreq = sorted[Math.floor(sorted.length / 2)];
+    const settled = settler.push(frame);
+    if (settled) {
+      const medianFreq = settled.freq;
 
-      let targetStrIdx = lockedStringIndex;
+      // The settled reading after a note ends keeps the string it was measured on.
+      let targetStrIdx = settled.final && heldReading ? heldReading.targetStrIdx : lockedStringIndex;
       if (targetStrIdx === null) {
         let bestDist = Infinity;
         for (let s = 0; s < currentTuning.length; s++) {

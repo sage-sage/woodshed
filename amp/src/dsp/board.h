@@ -35,7 +35,8 @@ enum class BlockType {
     Delay,      // MonoDelay (existing) with a tone control in the feedback path
     Reverb,     // "room" = Freeverb (existing), "lush" = DaisySP-LGPL ReverbSc
     Mixer,      // 2 inputs (A = port 0, B = port 1) blended by "balance", then "level"
-    Volume      // gain stage ("level"), handy on parallel paths
+    Volume,     // gain stage ("level"), handy on parallel paths
+    Metal       // high-gain metal/crunch distortion (MetalDistortion, 4x oversampled), with a built-in gate
 };
 
 inline constexpr int kMaxBlockParams = 8;

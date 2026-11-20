@@ -1616,7 +1616,7 @@ html.win-inactive .tb-btn:hover { opacity: 1; }
 .ws-update-dialog { width: min(520px, calc(100vw - 32px)); background: var(--bg); color: var(--fg); border: 2px solid var(--fg); box-shadow: 8px 8px 0 var(--accent); }
 .ws-update-head { display: flex; justify-content: space-between; padding: 12px 18px; border-bottom: 1px solid var(--line); font-family: var(--font-mono); font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--fg-muted); }
 .ws-update-body { padding: 32px 32px 24px; display: flex; flex-direction: column; align-items: center; gap: 16px; text-align: center; }
-.ws-update-mark { font-size: 52px; line-height: 1; color: var(--accent); }
+.ws-update-mark { display: block; width: 52px; height: 52px; color: var(--accent); }
 .ws-update-overlay[data-state="checking"] .ws-update-mark,
 .ws-update-overlay[data-state="installing"] .ws-update-mark { animation: wsUpdSpin 2.4s linear infinite; }
 .ws-update-overlay[data-state="none"] .ws-update-mark { color: var(--good); }

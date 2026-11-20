@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { decodeAudioFrame, JitterBuffer } from '../js/amp-link.js';
+import { decodeAudioFrame, JitterBuffer, AmpLink } from '../js/amp-link.js';
 
 function buildWsa1Packet({ sampleRate = 48000, frameIndex = 1, samples }) {
   const buf = new ArrayBuffer(16 + samples.length * 2);
@@ -108,4 +108,26 @@ test('JitterBuffer holds its target when the interface clock runs 0.3% fast (no 
     if (block > 2000) worst = Math.max(worst, Math.abs(jb.latencyMs - 12));
   }
   assert.ok(worst < 6, `buffer wandered ${worst.toFixed(1)} ms from its 12 ms target`);
+});
+
+test('AmpLink.setPreset skips the preset the amp already has, so a presets listener cannot loop', () => {
+  const amp = new AmpLink();
+  const sent = [];
+  amp._ws = { readyState: 1, send: (s) => sent.push(JSON.parse(s)) };
+  const presetsMsg = (current) => amp._handleTextMessage(JSON.stringify({ type: 'presets', current, list: [] }));
+  presetsMsg('clean');
+
+  // A listener that re-applies "clean" on every presets message (2.5.3's play screen) sends nothing.
+  amp.addEventListener('presets', () => amp.setPreset('clean'));
+  assert.equal(amp.setPreset('clean'), false);
+  assert.equal(sent.length, 0);
+
+  // A real change is sent; while it is on its way, asking for the old one again is sent too.
+  assert.equal(amp.setPreset('crunch'), true);
+  assert.equal(amp.setPreset('clean'), true);
+  assert.deepEqual(sent.map((m) => m.id), ['crunch', 'clean']);
+
+  // The amp answers: the listener's "clean" now matches and stays quiet.
+  presetsMsg('clean');
+  assert.equal(sent.length, 2);
 });

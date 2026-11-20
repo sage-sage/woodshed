@@ -4,6 +4,7 @@ import { loadTabFile, TAB_FILE_EXTENSIONS } from './tab-gp.js';
 import { songsterrToSong, describeSongsterr, songsterrVideoAnchors } from './songsterr.js';
 import { parseYouTubeId, createBackend, YOUTUBE_BLOCKED, YOUTUBE_BLOCKED_MSG } from './player.js';
 import { Highway } from './highway.js';
+import { isSparseTrack } from './autosync-check.js';
 
 const NOTE_TO_PC = {
   C: 0, 'C#': 1, Db: 1, D: 2, 'D#': 3, Eb: 3, E: 4, F: 5,
@@ -11,6 +12,10 @@ const NOTE_TO_PC = {
 };
 
 const ytTitleCache = new Map();
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+}
 
 function ytSuggestKindLabel(kind) {
   if (kind === 'original') return 'Original recording';
@@ -84,8 +89,19 @@ function formatBytes(bytes) {
   return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
 }
 
+/** Songsterr tracks with almost nothing to play for their length are usually vocals or a fill-in part. */
+export function sparseTrackWarning(noteCount, barCount) {
+  const n = Number(noteCount) || 0;
+  const bars = Number(barCount) || 0;
+  if (!isSparseTrack(n, bars)) return '';
+  return `This track has only ${n} notes${bars ? ` in ${bars} bars` : ''}, probably not the guitar part. ` +
+    'On Songsterr, open the guitar track and send it again (or pick it in the Tab Grabber popup).';
+}
+
 export function mount(container, ctx) {
-  const state = {
+  // Everything one import holds. A new import (Tab Grabber send, library add) starts from a fresh copy so
+  // nothing from the previous song (track list, suggested videos, chosen audio) carries over.
+  const freshState = () => ({
     step: 1, // 1 = TAB, 2 = AUDIO, 3 = SAVE
     tabSourceMode: 'paste', // 'paste' | 'gp' | 'json'
 
@@ -127,7 +143,15 @@ export function mount(container, ctx) {
     audioUrlDuration: 0,
     audioUrlValid: false,
     audioUrlStatus: ''
-  };
+  });
+  const state = freshState();
+
+  function resetImportState() {
+    destroyPreviewBackend();
+    destroyPreviewHighway();
+    if (debounceTimer) clearTimeout(debounceTimer);
+    Object.assign(state, freshState());
+  }
 
   let debounceTimer = null;
   let previewHighway = null;
@@ -433,7 +457,13 @@ export function mount(container, ctx) {
               </div>
             </div>
 
-            <span class="stat-label">Select Instrument Track (${state.gpFileName})</span>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+              <span class="stat-label">Select Instrument Track (${escapeHtml(state.gpFileName)})</span>
+              <button type="button" class="btn btn-sm btn-ghost" id="gp-clear-btn" title="Remove this tab and start over" aria-label="Remove this tab">&times; Remove</button>
+            </div>
+            ${state.gpLoaded.songsterr && sparseTrackWarning(state.gpLoaded.tracks[0]?.noteCount, state.gpLoaded.bars)
+              ? `<div class="notice-box" role="alert" style="margin:8px 0;">${escapeHtml(sparseTrackWarning(state.gpLoaded.tracks[0]?.noteCount, state.gpLoaded.bars))}</div>`
+              : ''}
             <div class="track-list">
               ${state.gpLoaded.tracks.map((tr) => {
                 const disabled = Boolean(tr.isPercussion);
@@ -442,7 +472,7 @@ export function mount(container, ctx) {
                 return `
                   <div class="track-item ${selected ? 'selected' : ''} ${disabled ? 'disabled' : ''}" data-track-idx="${tr.index}" data-disabled="${disabled}">
                     <div>
-                      <strong>${tr.name || `Track ${tr.index + 1}`}</strong>
+                      <strong>${escapeHtml(tr.name || `Track ${tr.index + 1}`)}</strong>
                       <div style="font-size:0.8rem;color:var(--text-muted);">
                         ${disabled ? 'Percussion / Drum Track (Not Playable)' : `${tr.strings || tr.tuning?.length || 6} strings · ${tName}`}
                       </div>
@@ -466,6 +496,12 @@ export function mount(container, ctx) {
         try {
           const buf = await file.arrayBuffer();
           const loaded = await loadTabFile(buf);
+          // A new file is a new song: drop the previous one's suggested videos and their timings.
+          state.ssVideos = [];
+          if (state.ytPointsId) {
+            state.ytPoints = null;
+            state.ytPointsId = '';
+          }
           state.gpLoaded = loaded;
           state.gpTitle = loaded.title || file.name.replace(/\.[^.]+$/, '');
           state.gpArtist = loaded.artist || 'Unknown Artist';
@@ -497,6 +533,12 @@ export function mount(container, ctx) {
       });
       subEl.querySelector('#gp-artist-input')?.addEventListener('input', (e) => {
         state.gpArtist = e.target.value;
+      });
+
+      subEl.querySelector('#gp-clear-btn')?.addEventListener('click', () => {
+        resetImportState();
+        state.tabSourceMode = 'gp';
+        render();
       });
 
       subEl.querySelectorAll('.track-item').forEach((item) => {
@@ -559,9 +601,14 @@ export function mount(container, ctx) {
   }
 
   function renderStep2(bodyEl) {
-    const suggestHtml = state.ssVideos.length > 0 && !YOUTUBE_BLOCKED
+    // Suggestions belong to the Songsterr tab they came with: hide them once another tab is the active one.
+    const suggestionsForActiveTab = state.tabSourceMode === 'gp' && state.gpLoaded?.songsterr;
+    const suggestHtml = state.ssVideos.length > 0 && suggestionsForActiveTab && !YOUTUBE_BLOCKED
       ? `<div class="yt-suggest">
-          <div class="yt-suggest-head">Videos for this tab</div>
+          <div class="yt-suggest-head" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
+            <span>Videos for this tab${state.gpLoaded.title ? `: ${escapeHtml(state.gpLoaded.title)}` : ''}</span>
+            <button type="button" class="btn btn-sm btn-ghost" id="yt-suggest-close" title="Hide these suggestions" aria-label="Hide suggested videos">&times; Hide</button>
+          </div>
           <div class="yt-suggest-grid">${state.ssVideos.map((v) => {
             const selected = state.ytPointsId === v.videoId && state.audioKind === 'youtube' ? ' is-selected' : '';
             return `<button type="button" class="yt-suggest-card${selected}" data-yt-suggest="${v.videoId}">
@@ -612,6 +659,11 @@ export function mount(container, ctx) {
         </div>
       </div>
     `;
+
+    bodyEl.querySelector('#yt-suggest-close')?.addEventListener('click', () => {
+      state.ssVideos = [];
+      render();
+    });
 
     bodyEl.querySelectorAll('[data-yt-suggest]').forEach((btn) => {
       const id = btn.dataset.ytSuggest;
@@ -918,7 +970,8 @@ export function mount(container, ctx) {
         audioDesc = { kind: 'url', url: state.audioDirectUrl };
       }
 
-      const presetAnchors = (state.audioKind === 'youtube' && state.ytPoints && state.ytPointsId === state.ytVideoId)
+      const presetAnchors = (state.audioKind === 'youtube' && state.ytPoints && state.ytPointsId === state.ytVideoId &&
+          state.tabSourceMode === 'gp' && state.gpLoaded?.songsterr)
         ? songsterrVideoAnchors(song, state.ytPoints)
         : [];
 
@@ -967,11 +1020,7 @@ export function mount(container, ctx) {
     const payload = typeof ctx.takePendingTabImport === 'function' ? ctx.takePendingTabImport() : null;
     if (!payload) return false;
 
-    destroyPreviewBackend();
-    state.step = 1;
-    state.ssVideos = [];
-    state.ytPoints = null;
-    state.ytPointsId = '';
+    resetImportState();
 
     if (payload.notation && typeof payload.notation === 'object') {
       const n = payload.notation;
@@ -982,8 +1031,10 @@ export function mount(container, ctx) {
         songsterrToSong(n, { title, artist });
         state.tabSourceMode = 'gp';
         state.gpLoaded = {
+          songsterr: true,
           title,
           artist,
+          bars: Array.isArray(n.measures) ? n.measures.length : 0,
           tracks: described.tracks,
           toSong: () => songsterrToSong(n, { title, artist })
         };
@@ -993,7 +1044,9 @@ export function mount(container, ctx) {
         state.gpFileName = `Songsterr: ${n.name || 'track'}`;
         state.gpError = '';
         state.ssVideos = Array.isArray(n.videos) ? n.videos.filter((v) => v && typeof v.videoId === 'string' && /^[A-Za-z0-9_-]{11}$/.test(v.videoId) && Array.isArray(v.points)) : [];
-        ctx.toast('Tab from Songsterr loaded with exact rhythm — check it and press Next', 'success');
+        const sparse = sparseTrackWarning(described.tracks[0]?.noteCount, state.gpLoaded.bars);
+        if (sparse) ctx.toast(sparse, 'error');
+        else ctx.toast('Tab from Songsterr loaded with exact rhythm — check it and press Next', 'success');
         return true;
       } catch (err) {
         const msg = err && err.message ? err.message : 'Could not read Songsterr rhythm data.';

@@ -5,7 +5,7 @@
  * alphaTab's MIDI generator is run once to get the bars in PLAYBACK order (repeats, alternate endings and
  * tempo changes unrolled), and every note is then placed on that timeline in seconds.
  */
-import { makeSong } from './song.js';
+import { makeSong, bendFromPoints } from './song.js';
 
 export const TAB_FILE_EXTENSIONS = ['.gp', '.gp3', '.gp4', '.gp5', '.gpx', '.musicxml', '.xml', '.mxl'];
 
@@ -78,7 +78,8 @@ function technique(at, note) {
   const origin = note.hammerPullOrigin;
   if (origin) return note.realValue >= origin.realValue ? 'h' : 'p';
   const slid = note.slideOrigin;
-  if (slid && slid.slideOutType === at.model.SlideOutType.Legato) return 'slide';
+  const S = at.model.SlideOutType;
+  if (slid && (slid.slideOutType === S.Legato || slid.slideOutType === S.Shift)) return 'slide';
   if (note.hasBend) return 'bend';
   if (note.isHarmonic) return 'harm';
   if (note.vibrato) return 'vib';
@@ -86,11 +87,26 @@ function technique(at, note) {
   return '';
 }
 
-function bendSemitones(note) {
-  if (!note.hasBend || !note.bendPoints) return 0;
-  let max = 0;
-  for (const p of note.bendPoints) if (p.value > max) max = p.value;
-  return max / 2; // alphaTab counts bends in quarter tones
+/** Bend, slide-in/out and vibrato facts (see techniqueFields in song.js). */
+function techniqueExtras(at, note, tech) {
+  const out = {};
+  if (note.hasBend && Array.isArray(note.bendPoints) && note.bendPoints.length) {
+    // alphaTab: offset 0..60 across the note, value in quarter tones
+    Object.assign(out, bendFromPoints(note.bendPoints.map((p) => ({ pos: (Number(p.offset) || 0) / 60, semis: (Number(p.value) || 0) / 2 }))));
+    const B = at.model.BendType;
+    if (note.bendType === B.Prebend || note.bendType === B.PrebendBend || note.bendType === B.PrebendRelease) out.prebend = true;
+    if (note.bendType === B.Release || note.bendType === B.BendRelease || note.bendType === B.PrebendRelease) {
+      if (out.bend) out.release = true;
+    }
+  }
+  const SI = at.model.SlideInType;
+  if (note.slideInType === SI.IntoFromBelow) out.slideIn = 'below';
+  else if (note.slideInType === SI.IntoFromAbove) out.slideIn = 'above';
+  const SO = at.model.SlideOutType;
+  if (note.slideOutType === SO.OutUp || note.slideOutType === SO.PickSlideUp) out.slideOut = 'up';
+  else if (note.slideOutType === SO.OutDown || note.slideOutType === SO.PickSlideDown) out.slideOut = 'down';
+  if (note.vibrato && tech !== 'vib') out.vibrato = true;
+  return out;
 }
 
 export function scoreToSong(at, score, trackIndex = 0) {
@@ -138,7 +154,7 @@ export function scoreToSong(at, score, trackIndex = 0) {
             const string = note.string - 1; // alphaTab: 1 = lowest string
             if (string < 0 || string >= strings) continue;
             const tech = technique(at, note);
-            const bend = bendSemitones(note);
+            const extras = techniqueExtras(at, note, tech);
             notes.push({
               t,
               dur: Math.max(0.03, end - t),
@@ -148,7 +164,7 @@ export function scoreToSong(at, score, trackIndex = 0) {
               tech,
               tie: Boolean(note.isTieDestination),
               dead: Boolean(note.isDead),
-              ...(bend ? { bend } : {}),
+              ...extras,
             });
           }
         }

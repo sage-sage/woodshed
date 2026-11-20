@@ -1,4 +1,4 @@
-import { makeSong } from './song.js';
+import { makeSong, bendFromPoints } from './song.js';
 
 const MAX_EXPANDED_MEASURES = 2000;
 
@@ -22,10 +22,37 @@ function isNaturalHarmonic(harmonic) {
 
 function resolveTechnique(note, beat) {
   if (note.dead) return 'x';
-  if (note.hp) return 'h';
-  if (note.slide) return 's';
-  if (note.vibrato || (beat && beat.vibrato)) return 'v';
+  if (note.vibrato || note.leftHandVibrato || (beat && beat.vibrato)) return 'vib';
   return '';
+}
+
+/*
+ * Songsterr note fields (checked on a real part JSON, Comfortably Numb lead):
+ *   hp: true            hammer-on/pull-off FROM this note to the next one on the string
+ *   slide: 'legato' | 'shift'      slide FROM this note to the next one
+ *          'below' | 'above'       slide INTO this note from below/above
+ *          'downwards' | 'upwards' slide OFF this note to nowhere
+ *   bend: { tone, points: [{ position 0..60, tone }] }  tone 100 = whole step (2 semitones)
+ *   leftHandVibrato: 'slight' | ..., ghost, staccato, harmonic: 'natural' | 'pinch' | ...
+ * Woodshed puts h/p/slide on the DESTINATION note (see techniqueFields in song.js).
+ */
+function slideKind(slide) {
+  if (!slide) return '';
+  const s = String(slide).toLowerCase();
+  if (s === 'legato' || s === 'shift' || s === 'true') return 'link';
+  if (/below/.test(s)) return 'inBelow';
+  if (/above/.test(s)) return 'inAbove';
+  if (/down/.test(s)) return 'outDown';
+  if (/up/.test(s)) return 'outUp';
+  return 'link';
+}
+
+function songsterrBend(bend) {
+  if (!bend || typeof bend !== 'object') return {};
+  const pts = Array.isArray(bend.points) && bend.points.length
+    ? bend.points.map((p) => ({ pos: (Number(p.position) || 0) / 60, semis: (Number(p.tone) || 0) / 50 }))
+    : (Number(bend.tone) > 0 ? [{ pos: 0, semis: 0 }, { pos: 1, semis: Number(bend.tone) / 50 }] : []);
+  return bendFromPoints(pts);
 }
 
 function beatBaseWhole(beat) {
@@ -244,6 +271,7 @@ export function songsterrToSong(notation, meta = {}) {
   const bars = [];
   const lastNoteByVoiceAndString = new Map();
   const lastNoteByString = new Map();
+  const pendingLink = new Map(); // voice:string -> { kind: 'hp' | 'slide', fret } from an h/p or slide origin
 
   for (const origIdx of playedIndices) {
     const m = measures[origIdx] || {};
@@ -315,12 +343,29 @@ export function songsterrToSong(notation, meta = {}) {
           const tech = resolveTechnique(rawNote, beat);
 
           const vsKey = `${vIdx}:${string}`;
+          const bendInfo = songsterrBend(rawNote.bend);
+          const slide = slideKind(rawNote.slide);
           if (tie) {
             const prev = lastNoteByVoiceAndString.get(vsKey) || lastNoteByString.get(string);
             if (prev) {
               prev.dur = Math.max(prev.dur, end - prev.t);
+              // a bend that starts or comes back down on the tied-over part belongs to the struck note
+              if (bendInfo.bend && !prev.bend) { const { prebend: _pb, ...rest } = bendInfo; Object.assign(prev, rest); if (!prev.tech) prev.tech = 'bend'; }
+              if (bendInfo.release && prev.bend) prev.release = true;
+              if (slide === 'outDown' || slide === 'outUp') prev.slideOut = slide === 'outDown' ? 'down' : 'up';
             }
           }
+
+          let linkedTech = '';
+          const link = pendingLink.get(vsKey);
+          if (link && !tie) {
+            pendingLink.delete(vsKey);
+            if (link.kind === 'slide' && fret !== link.fret) linkedTech = 'slide';
+            else if (link.kind === 'hp' && fret > link.fret) linkedTech = 'h';
+            else if (link.kind === 'hp' && fret < link.fret) linkedTech = 'p';
+          }
+          if (rawNote.hp) pendingLink.set(vsKey, { kind: 'hp', fret });
+          else if (slide === 'link') pendingLink.set(vsKey, { kind: 'slide', fret });
 
           const noteObj = {
             t,
@@ -328,10 +373,15 @@ export function songsterrToSong(notation, meta = {}) {
             string,
             fret,
             midi,
-            tech,
+            tech: linkedTech || (bendInfo.bend && !tie ? 'bend' : '') || tech,
             tie,
-            dead
+            dead,
+            ...(tie ? {} : bendInfo),
+            ...(slide === 'inBelow' ? { slideIn: 'below' } : slide === 'inAbove' ? { slideIn: 'above' } : {}),
+            ...(slide === 'outDown' ? { slideOut: 'down' } : slide === 'outUp' ? { slideOut: 'up' } : {}),
+            ...(tech === 'vib' && (linkedTech || (bendInfo.bend && !tie)) ? { vibrato: true } : {})
           };
+          for (const k of Object.keys(noteObj)) if (noteObj[k] === undefined) delete noteObj[k];
           notes.push(noteObj);
 
           if (!tie) {

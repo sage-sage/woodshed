@@ -402,6 +402,175 @@
     return systems.join('\n\n');
   }
 
+  // ---- Which Songsterr track is shown -------------------------------------------------------------
+  // Songsterr is a single-page app: the <script id="state"> JSON is written once by the server and is NOT
+  // updated when you move to another song inside the site, so it can describe a song you left minutes ago.
+  // The address bar, the rendered tab and the track name in the header are live; the state only counts when
+  // its song id matches the address.
+
+  function parseSongsterrUrl(url) {
+    const s = String(url || '');
+    const m = s.match(/-s(\d+)(?:t(\d+))?(?:\/r(\d+))?(?=[/?#]|$)/);
+    if (!m) return { songId: null, partId: null, revisionId: null };
+    return {
+      songId: m[1],
+      partId: m[2] !== undefined ? parseInt(m[2], 10) : null,
+      revisionId: m[3] !== undefined ? parseInt(m[3], 10) : null
+    };
+  }
+
+  function normName(s) {
+    return String(s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  }
+
+  function isPlayableTrack(t) {
+    if (!t || typeof t !== 'object') return false;
+    if (t.isVocalTrack || t.isDrums) return false;
+    const id = Number(t.instrumentId);
+    // General MIDI 24-31 are guitars, 32-39 basses; Songsterr drums are 1024.
+    if (Number.isFinite(id) && id >= 24 && id <= 39) return true;
+    return /guitar|bass/i.test(String(t.instrument || ''));
+  }
+
+  /** Notes you actually pick: rests and tied continuations don't count. */
+  function countPlayedNotes(raw) {
+    let n = 0;
+    const measures = raw && Array.isArray(raw.measures) ? raw.measures : [];
+    for (const m of measures) {
+      for (const v of (m && Array.isArray(m.voices) ? m.voices : [])) {
+        for (const b of (v && Array.isArray(v.beats) ? v.beats : [])) {
+          if (!b || b.rest) continue;
+          for (const note of (Array.isArray(b.notes) ? b.notes : [])) {
+            if (note && !note.rest && !note.tie) n += 1;
+          }
+        }
+      }
+    }
+    return n;
+  }
+
+  /** A track with almost nothing to play for its length is probably not the part you want. */
+  function isSparseTrack(noteCount, measureCount) {
+    const n = Number(noteCount) || 0;
+    const bars = Number(measureCount) || 0;
+    return n < Math.max(24, bars * 0.5);
+  }
+
+  /**
+   * Decides which song, revision and track to read.
+   * input: { url, state (parsed #state JSON or null), apiMeta (/api/meta/<song> JSON or null),
+   *          headerTexts (texts of the header's track-name spans), domPartIds (data-part-id values in the
+   *          rendered tab), chosenPartId (the user's pick in the popup, or null) }
+   * Signals in order of trust: the user's pick, the track name in the header, the rendered tab's part id,
+   * the address's "t<N>", then the page state (only if it is for this song).
+   */
+  function resolveSongsterrTrack(input = {}) {
+    const notes = [];
+    const u = parseSongsterrUrl(input.url);
+    const meta = input.state && typeof input.state.meta === 'object' && input.state.meta ? input.state.meta : {};
+    const cur = meta.current && typeof meta.current === 'object' ? meta.current : {};
+    const rawStateSong = meta.songId ?? cur.songId ?? null;
+    const stateSongId = rawStateSong !== null && rawStateSong !== undefined && rawStateSong !== '' ? String(rawStateSong) : null;
+    const songId = u.songId ?? stateSongId;
+    if (!songId) {
+      return { songId: null, revisionId: null, image: null, partId: null, partSource: '', tracks: [], stateFresh: false, notes: ['no song id'] };
+    }
+    const stateFresh = stateSongId !== null && stateSongId === songId;
+    if (stateSongId !== null && !stateFresh) notes.push(`page state is for song ${stateSongId}, not ${songId}: ignored`);
+    const api = input.apiMeta && typeof input.apiMeta === 'object' && String(input.apiMeta.songId) === songId ? input.apiMeta : null;
+
+    const rawTracks = stateFresh && Array.isArray(cur.tracks) && cur.tracks.length > 0
+      ? cur.tracks
+      : (api && Array.isArray(api.tracks) ? api.tracks : []);
+    const tracks = rawTracks.map((t, i) => ({
+      partId: Number.isInteger(t?.partId) ? t.partId : i,
+      name: typeof t?.name === 'string' ? t.name : '',
+      instrument: typeof t?.instrument === 'string' ? t.instrument : '',
+      instrumentId: Number.isFinite(t?.instrumentId) ? t.instrumentId : null,
+      playable: isPlayableTrack(t)
+    }));
+
+    let revisionId = u.revisionId;
+    let image = null;
+    const stateRev = stateFresh ? (cur.revisionId ?? meta.revisionId ?? null) : null;
+    if (revisionId === null && Number.isFinite(Number(stateRev)) && stateRev !== null) revisionId = Number(stateRev);
+    if (revisionId === null && api && Number.isFinite(Number(api.revisionId))) revisionId = Number(api.revisionId);
+    // The data folder name ("v0-3-2-...") belongs to one revision.
+    if (stateFresh && typeof cur.image === 'string' && Number(cur.revisionId) === revisionId) image = cur.image;
+    else if (api && typeof api.image === 'string' && Number(api.revisionId) === revisionId) image = api.image;
+
+    const known = (id) => tracks.length === 0 || tracks.some((t) => t.partId === id);
+    const candidates = [];
+    const chosen = Number.parseInt(input.chosenPartId, 10);
+    if (Number.isInteger(chosen) && known(chosen)) candidates.push(['chosen', chosen]);
+
+    // The header shows the instrument and the track name, sometimes in one element ("Overdriven GuitarRobert
+    // Smith | ... | Lead Guitar"), so a track matches when its name is inside a header text. When names nest
+    // ("Lead" and "Lead 2"), the longest match wins; equal names can't be told apart.
+    const headers = (Array.isArray(input.headerTexts) ? input.headerTexts : []).map(normName).filter(Boolean);
+    if (headers.length > 0 && tracks.length > 0) {
+      const hits = tracks.filter((t) => normName(t.name) && headers.some((h) => h.includes(normName(t.name))));
+      const longest = hits.reduce((m, t) => Math.max(m, normName(t.name).length), 0);
+      const best = hits.filter((t) => normName(t.name).length === longest);
+      if (best.length === 1) candidates.push(['header', best[0].partId]);
+      else if (best.length > 1) notes.push('several tracks share the shown name');
+    }
+    const domIds = Array.from(new Set((Array.isArray(input.domPartIds) ? input.domPartIds : [])
+      .map((v) => Number.parseInt(v, 10)).filter(Number.isInteger)));
+    if (domIds.length === 1 && known(domIds[0])) candidates.push(['page', domIds[0]]);
+    else if (domIds.length > 1) notes.push(`the page shows several parts (${domIds.join(', ')})`);
+    if (u.partId !== null && known(u.partId)) candidates.push(['address', u.partId]);
+    const statePart = stateFresh ? Number.parseInt(meta.partId ?? cur.partId, 10) : NaN;
+    if (Number.isInteger(statePart) && known(statePart)) candidates.push(['state', statePart]);
+
+    const [partSource, partId] = candidates[0] || ['', null];
+    for (const [src, id] of candidates.slice(1)) {
+      if (id !== partId) notes.push(`${src} says track ${id}, ${partSource} says ${partId}`);
+    }
+    return { songId, revisionId, image, partId, partSource, tracks, stateFresh, notes };
+  }
+
+  /** Picks the note-data URL for one part from the page's loaded resources (or builds it). */
+  function findPartJsonUrl(resourceNames, { songId, revisionId, image, partId }) {
+    const re = new RegExp(`^/${String(songId).replace(/\D/g, '')}/(\\d+)/([^/]+)/(\\d+)\\.json$`);
+    const found = [];
+    for (const name of Array.isArray(resourceNames) ? resourceNames : []) {
+      try {
+        const p = new URL(name);
+        if (!p.hostname.toLowerCase().endsWith('cloudfront.net')) continue;
+        const m = p.pathname.match(re);
+        if (m) found.push({ url: name, origin: p.origin, rev: parseInt(m[1], 10), image: m[2], part: parseInt(m[3], 10) });
+      } catch (_err) {
+        // not a URL
+      }
+    }
+    const pick = (pool) => {
+      for (let i = pool.length - 1; i >= 0; i--) {
+        if (pool[i].part === partId) return { url: pool[i].url, revisionId: pool[i].rev };
+      }
+      // The part wasn't downloaded yet: same folder, other file name.
+      const ref = pool[pool.length - 1];
+      return ref ? { url: `${ref.origin}/${songId}/${ref.rev}/${ref.image}/${partId}.json`, revisionId: ref.rev } : null;
+    };
+    const hasRev = revisionId !== null && revisionId !== undefined;
+    const sameRev = hasRev ? found.filter((f) => f.rev === revisionId) : found;
+    if (sameRev.length > 0) return pick(sameRev);
+    if (hasRev && image) {
+      const origin = found[0]?.origin || 'https://dqsljvtekg760.cloudfront.net';
+      return { url: `${origin}/${songId}/${revisionId}/${image}/${partId}.json`, revisionId };
+    }
+    return pick(found);
+  }
+
+  globalThis.WoodshedSongsterrTracks = {
+    parseSongsterrUrl,
+    isPlayableTrack,
+    countPlayedNotes,
+    isSparseTrack,
+    resolveSongsterrTrack,
+    findPartJsonUrl
+  };
+
   globalThis.WoodshedNotation = {
     notationToAscii
   };

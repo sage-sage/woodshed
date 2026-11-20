@@ -87,10 +87,6 @@ export function mountTitleBar() {
   bar.id = 'titlebar';
   bar.className = 'titlebar';
   bar.innerHTML = `
-    <div class="titlebar-brand">
-      <img src="icons/mark.svg" alt="" width="16" height="16" />
-      <span>Woodshed</span>
-    </div>
     <div class="titlebar-title" id="titlebar-title"></div>
     <div class="titlebar-controls">
       <button type="button" class="tb-btn" data-win="minimize" aria-label="Minimize" title="Minimize">
@@ -140,7 +136,7 @@ export function openUpdateDialog(check) {
     <section class="ws-update-dialog" role="dialog" aria-modal="true" aria-labelledby="ws-update-title">
       <header class="ws-update-head"><span>Woodshed for Windows</span><span>v${desktop.version}</span></header>
       <div class="ws-update-body">
-        <div class="ws-update-mark" aria-hidden="true">✦</div>
+        <svg class="ws-update-mark" viewBox="0 0 100 100" aria-hidden="true"><path fill="currentColor" fill-rule="evenodd" d="M50 2L56.5 38.74L91.57 26L63 50L91.57 74L56.5 61.26L50 98L43.5 61.26L8.43 74L37 50L8.43 26L43.5 38.74ZM50 44a6 6 0 1 0 0 12a6 6 0 1 0 0-12Z"/></svg>
         <h2 id="ws-update-title" class="ws-update-title"></h2>
         <p class="ws-update-text"></p>
         <div class="ws-update-bar" aria-hidden="true"><span></span></div>
@@ -176,16 +172,16 @@ export function openUpdateDialog(check) {
     root.dataset.state = st.status;
     primary.hidden = true;
     if (st.status === 'checking' || st.status === 'idle') {
-      $('.ws-update-title').textContent = 'Checking for updates';
+      $('.ws-update-title').textContent = 'Checking for Updates';
       $('.ws-update-text').textContent = 'Looking for a newer Woodshed on GitHub. This takes a second or two.';
       step('reach', '…', 'is-active'); step('compare', '', ''); step('install', 'If newer', 'is-dim');
     } else if (st.status === 'none') {
-      $('.ws-update-title').textContent = 'You’re up to date';
+      $('.ws-update-title').textContent = 'You’re Up to Date';
       $('.ws-update-text').textContent = `Woodshed ${desktop.version} is the latest version.`;
       step('reach', 'Done', 'is-done'); step('compare', 'Same version', 'is-done'); step('install', 'Not needed', 'is-dim');
       primary.hidden = false; primary.textContent = 'Check again'; primary.onclick = () => check?.();
     } else if (st.status === 'available') {
-      $('.ws-update-title').textContent = `Woodshed ${st.version} is ready`;
+      $('.ws-update-title').textContent = `Woodshed ${st.version} Is Ready`;
       $('.ws-update-text').textContent = `You have ${desktop.version}. Updating closes Woodshed, installs the new version and opens it again.`;
       step('reach', 'Done', 'is-done'); step('compare', `${st.version} is newer`, 'is-done'); step('install', 'Waiting for you', 'is-active');
       primary.hidden = false; primary.textContent = `Update to ${st.version}`; primary.onclick = () => installUpdate();
@@ -194,7 +190,7 @@ export function openUpdateDialog(check) {
       $('.ws-update-text').textContent = 'Downloading the update. Woodshed closes, installs it and opens again by itself.';
       step('reach', 'Done', 'is-done'); step('compare', 'Done', 'is-done'); step('install', '…', 'is-active');
     } else if (st.status === 'failed') {
-      $('.ws-update-title').textContent = 'Couldn’t check for updates';
+      $('.ws-update-title').textContent = 'Couldn’t Check for Updates';
       $('.ws-update-text').textContent = `${st.error}. You have Woodshed ${desktop.version}.`;
       step('reach', 'Failed', 'is-bad'); step('compare', '', 'is-dim'); step('install', '', 'is-dim');
       primary.hidden = false; primary.textContent = 'Try again'; primary.onclick = () => check?.();

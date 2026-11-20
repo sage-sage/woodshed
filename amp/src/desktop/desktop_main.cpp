@@ -742,6 +742,12 @@ private:
             settings->put_IsStatusBarEnabled(FALSE);
             settings->put_IsZoomControlEnabled(TRUE);
             settings->put_AreDefaultContextMenusEnabled(TRUE);
+            // No two/three-finger trackpad swipe or edge-swipe "back": the app is one page with hash
+            // routes, and a stray swipe used to jump out of the play screen or pedalboard.
+            ComPtr<ICoreWebView2Settings6> settings6;
+            if (SUCCEEDED(settings.as(settings6)) && settings6) {
+                settings6->put_IsSwipeNavigationEnabled(FALSE);
+            }
             // Lets the page's title bar drag the window via CSS `app-region: drag`.
             ComPtr<ICoreWebView2Settings9> settings9;
             if (SUCCEEDED(settings.as(settings9)) && settings9) {

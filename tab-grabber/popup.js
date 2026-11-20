@@ -37,8 +37,50 @@ const capoInput = document.getElementById('capo-input');
 const bpmInput = document.getElementById('bpm-input');
 const tabPreview = document.getElementById('tab-preview');
 const statusBanner = document.getElementById('status-banner');
+const trackRow = document.getElementById('track-row');
+const trackSelect = document.getElementById('track-select');
+const msgTrackRow = document.getElementById('msg-track-row');
+const msgTrackSelect = document.getElementById('msg-track-select');
 
 let currentExtraction = null;
+
+function trackOptionLabel(t) {
+  const bits = [t.name || `Track ${t.partId + 1}`];
+  if (t.instrument) bits.push(t.instrument);
+  if (Number.isFinite(t.notes)) bits.push(`${t.notes} notes`);
+  if (!t.playable) bits.push('not guitar/bass');
+  return bits.join(' · ');
+}
+
+// Fills a Songsterr track picker; returns false (and hides the row) when there is nothing to pick from.
+function fillTrackPicker(row, select, tracks, selectedPartId) {
+  const list = Array.isArray(tracks) ? tracks : [];
+  select.innerHTML = '';
+  if (list.length < 2 && selectedPartId !== null && selectedPartId !== undefined) {
+    row.classList.add('hidden');
+    return false;
+  }
+  if (selectedPartId === null || selectedPartId === undefined) {
+    const placeholder = document.createElement('option');
+    placeholder.value = '';
+    placeholder.textContent = 'Choose a track…';
+    select.appendChild(placeholder);
+  }
+  for (const t of list) {
+    const opt = document.createElement('option');
+    opt.value = String(t.partId);
+    opt.textContent = trackOptionLabel(t);
+    select.appendChild(opt);
+  }
+  select.value = selectedPartId === null || selectedPartId === undefined ? '' : String(selectedPartId);
+  row.classList.remove('hidden');
+  return true;
+}
+
+function onTrackPicked(e) {
+  const partId = parseInt(e.target.value, 10);
+  if (Number.isInteger(partId)) runExtraction(partId);
+}
 let currentSummary = null;
 
 function showView(name) {
@@ -47,8 +89,13 @@ function showView(name) {
   resultView.classList.toggle('hidden', name !== 'result');
 }
 
-function showMessage(text, site = '') {
+function showMessage(text, site = '', tracks = null) {
   msgText.textContent = text;
+  if (Array.isArray(tracks) && tracks.length > 0) {
+    fillTrackPicker(msgTrackRow, msgTrackSelect, tracks, null);
+  } else {
+    msgTrackRow.classList.add('hidden');
+  }
   if (site) {
     msgSiteChip.textContent = site;
     msgSiteChip.classList.remove('hidden');
@@ -174,6 +221,8 @@ function renderResult(data) {
     warningText.textContent = '';
     warningText.classList.add('hidden');
   }
+  warningText.classList.toggle('is-alert', Boolean(data.trackWarning));
+  fillTrackPicker(trackRow, trackSelect, data.tracks, data.partId);
 
   statusBanner.classList.add('hidden');
   updateSummaryAndPreview();
@@ -292,7 +341,7 @@ function saveAsTxt() {
   setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
 
-async function runExtraction() {
+async function runExtraction(chosenPartId = null) {
   showView('loading');
   let activeTab = null;
 
@@ -326,6 +375,15 @@ async function runExtraction() {
       setTimeout(() => reject(new Error('Timed out while scanning this page.')), timeoutMs);
     });
 
+    // A track picked in the popup is handed to extract.js through the extension's own script world.
+    await chrome.scripting.executeScript({
+      target: { tabId: activeTab.id },
+      func: (p) => {
+        if (Number.isInteger(p)) globalThis.__woodshedSongsterrPart = p;
+        else delete globalThis.__woodshedSongsterrPart;
+      },
+      args: [Number.isInteger(chosenPartId) ? chosenPartId : null]
+    });
     const execPromise = chrome.scripting.executeScript({
       target: { tabId: activeTab.id },
       files: ['lib/songsterr.js', 'extract.js']
@@ -342,7 +400,7 @@ async function runExtraction() {
     if (res.ok && res.kind === 'tab') {
       renderResult(res);
     } else {
-      showMessage(res.message || 'No ASCII guitar tab was found on this page.', res.site || '');
+      showMessage(res.message || 'No ASCII guitar tab was found on this page.', res.site || '', res.kind === 'choose-track' ? res.tracks : null);
     }
   } catch (err) {
     const restrictedReason = explainRestrictedUrl(activeTab?.url || '');
@@ -364,7 +422,9 @@ document.getElementById('send-btn').addEventListener('click', handleSendToWoodsh
 document.getElementById('save-lib-btn').addEventListener('click', handleSaveToLibrary);
 document.getElementById('copy-btn').addEventListener('click', copyToClipboard);
 document.getElementById('save-btn').addEventListener('click', saveAsTxt);
-document.getElementById('retry-btn').addEventListener('click', runExtraction);
+document.getElementById('retry-btn').addEventListener('click', () => runExtraction());
+trackSelect.addEventListener('change', onTrackPicked);
+msgTrackSelect.addEventListener('change', onTrackPicked);
 document.getElementById('open-library-btn').addEventListener('click', openLibraryPage);
 document.getElementById('msg-library-btn').addEventListener('click', openLibraryPage);
 document.getElementById('open-options-btn').addEventListener('click', () => {

@@ -1,9 +1,23 @@
 /* ==========================================================================
    Woodshed "Rodeo Night" theme (2026-11): loaded LAST, on top of style/views/play/pedalboard.
-   Vintage poster type (Rye for the logo and page titles, Ultra for song tiles) + a modern grotesk
-   (Archivo) and monospace labels; square corners; one hot colour (vermilion) reserved for the thing the
-   eye should go to first; maple stays as the quiet second colour.
+   Poster type (a heavy condensed display face for the wordmark and page titles, Ultra for song tiles) + a
+   modern grotesk (Archivo) and monospace labels; square corners; one hot colour (vermilion) reserved for the
+   thing the eye should go to first; maple stays as the quiet second colour.
    ========================================================================== */
+
+/* The display face is vendored in fonts/ so the desktop app's wordmark and titles work offline.
+   Alternative: fonts/big-shoulders-display-900.woff2 drops in at the same sizes. */
+@font-face {
+  font-family: 'Woodshed Display';
+  src: url('../fonts/anton.woff2') format('woff2');
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
+/* No trackpad / edge-swipe "back" (Chrome's overscroll history navigation) and no rubber-band bounce:
+   this is an app, and a stray swipe used to jump out of the song. */
+html, body, .app-shell, .main-view, .left-rail, .workspace { overscroll-behavior: none; }
 
 :root {
   --bg: #1a1613;
@@ -27,9 +41,22 @@
   --board: #15110e;
   --board-2: #0f0c0a;
 
+  /* Screen-surface tokens (canvas & SVG use these via readVar; dark values match the current literals) */
+  --hw-barline: #5a5249;
+  --hw-techmark: #d6cfc4;
+  --hw-wound: rgba(176, 141, 87, 0.38);
+  --hw-glow: rgba(214, 162, 108, 0.35);
+  --string-plain: #cfcac2;
+  --nut: #e9e1cf;
+  --tl-grid: rgba(241, 231, 208, 0.16);
+  --tl-grid-faint: rgba(241, 231, 208, 0.12);
+  --tl-grid-strong: rgba(241, 231, 208, 0.18);
+  --tl-shade: rgba(0, 0, 0, 0.22);
+  --tl-idle: rgba(241, 231, 208, 0.28);
+
   --font-display: 'Archivo', system-ui, -apple-system, sans-serif;
   --font-body: 'Archivo', system-ui, -apple-system, sans-serif;
-  --font-poster: 'Rye', 'Archivo', serif;
+  --font-poster: 'Woodshed Display', 'Archivo', system-ui, sans-serif;
   --font-tile: 'Ultra', 'Archivo', serif;
   --font-serif: var(--font-display);  /* headings in cards stay Archivo; Rye only where named below */
 
@@ -40,7 +67,8 @@
 }
 
 /* ---- Square corners everywhere, except things that are round in real life ---- */
-*, *::before, *::after { border-radius: 0 !important; }
+/* Pedal art (.pa) is drawn as real objects with its own round knobs, LEDs and footswitches: leave it alone. */
+:where(*:not(.pa, .pa *)), :where(*:not(.pa *))::before, :where(*:not(.pa *))::after { border-radius: 0 !important; }
 .pb-jack, .amp-knob-dial, .amp-knob-dial::before, .amp-knob-dial::after, .status-dot, .stomp,
 .spinner-dot, .learn-legend-dot, .toast::before { border-radius: 50% !important; }
 
@@ -48,7 +76,15 @@ body { font-family: var(--font-body); }
 
 /* ---- Left rail ---- */
 
-.brand-wordmark { font-family: var(--font-poster); font-weight: 400; font-size: 28px; letter-spacing: 0.01em; color: var(--fg); }
+/* One wordmark, no pick logo next to it; its left edge lines up with the nav labels below (14px rail + 14px link). */
+.brand-header { padding: 2px 14px 16px; }
+.brand-tube-dot { display: none; }
+.brand-wordmark { font-family: var(--font-poster); font-weight: 400; font-size: 34px; line-height: 1; letter-spacing: 0.03em; text-transform: uppercase; color: var(--fg); }
+@media (max-width: 900px) {  /* the rail is a top bar here */
+  .brand-header { padding: 0 6px 0 0; }
+  .brand-wordmark { font-size: 28px; }
+}
+@media (max-width: 600px) { .brand-wordmark { font-size: 24px; } }
 .brand-subtitle { font-family: var(--font-mono); font-size: 10px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--fg-faint); }
 .brand-subtitle::before, .brand-subtitle::after { content: " \2726 "; color: var(--hot); }
 .rail-link { height: 42px; font-weight: 700; font-size: 13px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--fg-muted); }
@@ -174,7 +210,9 @@ h1, h2, h3 { letter-spacing: -0.01em; }
   transform: none;
   box-shadow: none;
 }
-.titlebar-brand span { font-family: var(--font-poster); font-weight: 400; font-size: 14px; letter-spacing: 0.02em; }
+/* Desktop title bar: no logo or name (the sidebar wordmark sits right under it); a spacer as wide as the three
+   window buttons keeps the song title centred. */
+.titlebar::before { content: ""; flex: 0 0 138px; }
 
 .saved-tab-actions .btn-primary { background: transparent; color: var(--accent); border: 1px solid var(--accent); box-shadow: none; }
 .saved-tab-actions .btn-primary:hover:not(:disabled) { background: var(--accent); background-color: var(--accent); color: var(--accent-ink); transform: none; box-shadow: none; }
@@ -199,8 +237,8 @@ h2[style*="font-serif"], .serif-heading { font-weight: 800; letter-spacing: -0.0
 /* ==========================================================================
    Light mode ("Desert Daylight"): cream paper, ink, vermilion. Chosen in Settings > Appearance; the
    <html data-theme="light"> attribute is set by js/app.js (also for "match Windows").
-   Device screens (note highway, fretboards, faders, pedalboard, tuner dial...) stay dark, like displays
-   on a poster: they re-declare the dark palette below so their text and canvases keep working.
+   All screens (highway, fretboard, faders, pedalboard, tuner, timeline, tabs) are now light too —
+   they receive their own light tokens below. Only the YouTube pip dock and .ws-dark-scope stay dark.
    ========================================================================== */
 :root[data-theme="light"] {
   color-scheme: light;
@@ -225,12 +263,29 @@ h2[style*="font-serif"], .serif-heading { font-weight: 800; letter-spacing: -0.0
   --good: #2f7a45;
   --bad: #b3261e;
   --warn: #8a6100;
+
+  /* Screen-surface tokens for light mode */
+  --screen: #f3ead8;
+  --screen-2: #e9dec7;
+  --rosewood: #e3c693;
+  --nickel: #8c8378;
+  --pearl: #2a1d14;
+  --bronze: #8a5a22;
+  --hw-barline: #9c8a72;
+  --hw-techmark: #2a1d14;
+  --hw-wound: rgba(120, 80, 30, 0.5);
+  --hw-glow: rgba(194, 56, 27, 0.22);
+  --string-plain: #6f6252;
+  --nut: #f6efdd;
+  --tl-grid: rgba(42, 29, 20, 0.16);
+  --tl-grid-faint: rgba(42, 29, 20, 0.10);
+  --tl-grid-strong: rgba(42, 29, 20, 0.22);
+  --tl-shade: rgba(42, 29, 20, 0.08);
+  --tl-idle: rgba(42, 29, 20, 0.30);
 }
 
-/* The dark palette, re-declared on things that are screens or controls with dark surfaces. */
-:root[data-theme="light"] :is(.left-rail, .titlebar, .play-screen, .highway-stage, .fretboard, .screen, .tuner-gauge-card,
-  .fader-bank, .pedal-faders, .pb-viewport, .layer-mini-highway, .highway-preview-box, .sync-timeline-wrap,
-  .tab-textarea, .chord-diagram, pre, .yt-pip-dock, .res-hist, .res-spark-box, .anchor-table-wrap, .ws-dark-scope) {
+/* The dark palette, re-declared only on the YouTube pip dock and explicit dark-scope markers. */
+:root[data-theme="light"] :is(.yt-pip-dock, .ws-dark-scope) {
   color-scheme: dark;
   --bg: #1a1613;
   --panel: #241e1a;
@@ -252,7 +307,21 @@ h2[style*="font-serif"], .serif-heading { font-weight: 800; letter-spacing: -0.0
   --warn: #e9d29a;
   color: var(--fg);
 }
-:root[data-theme="light"] .left-rail { border-right-color: #2a1d14; }
+/* Light sidebar and desktop title bar: warm paper, ink type, a 1px ink rule against the content; vermilion only
+   on the current nav item. (Dark mode keeps the black rail above.) */
+:root[data-theme="light"] .left-rail { background: #e6dac2; color: var(--fg); border-right-color: #2a1d14; border-bottom-color: #2a1d14; }
+:root[data-theme="light"] .brand-header { border-bottom-color: #2a1d14; }
+:root[data-theme="light"] .brand-wordmark { color: var(--fg); }
+:root[data-theme="light"] .rail-link { color: var(--fg-muted); }
+:root[data-theme="light"] .rail-link:hover { background: #d8caae; color: var(--fg); }
+:root[data-theme="light"] .rail-link.active { background: var(--hot); color: var(--hot-ink); }
+:root[data-theme="light"] .left-rail .rail-input-card.card { background: var(--panel); border-color: #2a1d14; box-shadow: none; }
+:root[data-theme="light"] .left-rail .meter-track { background: var(--screen-2); }
+:root[data-theme="light"] .titlebar { background: #e6dac2; color: var(--fg-muted); border-bottom-color: #2a1d14; }
+:root[data-theme="light"] .tb-btn { color: var(--fg); }
+:root[data-theme="light"] .tb-btn:hover { background: rgba(42, 29, 20, 0.1); }
+:root[data-theme="light"] .tb-btn:active { background: rgba(42, 29, 20, 0.05); }
+:root[data-theme="light"] .tb-close:hover, :root[data-theme="light"] .tb-close:active { background: #c42b1c; color: #fff; }
 
 /* Light-mode details */
 :root[data-theme="light"] body { background: var(--bg); color: var(--fg); }
@@ -284,3 +353,151 @@ h2[style*="font-serif"], .serif-heading { font-weight: 800; letter-spacing: -0.0
 
 :root[data-theme="light"] :is(.rail-connect-btn, #setup-amp-dl, .saved-tab-actions .btn).btn-primary { background: transparent; color: var(--accent); border: 1px solid var(--accent); box-shadow: none; }
 :root[data-theme="light"] :is(#btn-metronome, #btn-countin, #btn-fingering).btn-primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); box-shadow: none; }
+
+/* ==========================================================================
+   Light-mode overrides for hard-coded dark colours in play.css / pedalboard.css / views.css.
+   These override background-color and border literals on play-screen surfaces so they
+   pick up the light --screen / --panel tokens. Dark mode is unaffected (data-theme="light" only).
+   ========================================================================== */
+
+/* Play screen surface */
+:root[data-theme="light"] .play-screen {
+  background: var(--screen);
+  border-color: var(--line);
+  box-shadow: inset 0 2px 18px rgba(42, 29, 20, 0.12);
+}
+
+/* Tab highway stage background */
+:root[data-theme="light"] .highway-stage {
+  background: var(--screen);
+}
+
+/* Loop toggle on the deck */
+:root[data-theme="light"] .deck-loop-toggle {
+  background: var(--screen);
+  border-color: var(--line-strong);
+  color: var(--fg-muted);
+}
+
+/* Fretboard panel (boxed, outside the play screen) */
+:root[data-theme="light"] .fretboard {
+  background: var(--screen);
+  border-color: var(--line);
+}
+
+/* Tuner gauge card */
+:root[data-theme="light"] .tuner-gauge-card {
+  background: var(--panel);
+  border-color: var(--line);
+}
+
+/* Fader banks */
+:root[data-theme="light"] .fader-bank {
+  background: var(--screen);
+  box-shadow: inset 0 1px 3px rgba(42, 29, 20, 0.15), 0 1px 0 rgba(255, 255, 255, 0.5);
+}
+:root[data-theme="light"] input.fader-input::-webkit-slider-runnable-track {
+  background: var(--screen-2);
+  box-shadow: inset 0 1px 2px rgba(42, 29, 20, 0.2), 0 0 0 1px rgba(42, 29, 20, 0.08);
+}
+:root[data-theme="light"] .board-cap {
+  background: var(--screen);
+  border-color: var(--line);
+}
+
+/* Tab textarea */
+:root[data-theme="light"] .tab-textarea {
+  background: var(--screen);
+  color: var(--fg);
+  border-color: var(--line);
+}
+
+/* Highway preview box (import page) */
+:root[data-theme="light"] .highway-preview-box {
+  background: var(--screen);
+  border-color: var(--line);
+}
+
+/* Sync timeline */
+:root[data-theme="light"] .sync-timeline-wrap {
+  background: var(--screen);
+  border-color: var(--line);
+}
+
+/* Anchor table */
+:root[data-theme="light"] .anchor-table-wrap {
+  background: var(--screen);
+  border-color: var(--line);
+}
+
+/* Chord diagram */
+:root[data-theme="light"] .chord-diagram {
+  background: var(--screen);
+  border-color: var(--line);
+}
+
+/* Result sparkline box and histogram */
+:root[data-theme="light"] .res-spark-box,
+:root[data-theme="light"] .res-hist {
+  background: var(--screen);
+}
+
+/* Layer mini-highway */
+:root[data-theme="light"] .layer-mini-highway {
+  background: var(--screen);
+  border-color: var(--line);
+}
+
+/* Pedalboard viewport: warm paper + subtle ink dot grid */
+:root[data-theme="light"] .pb-viewport {
+  background-color: #efe6d3;
+}
+:root[data-theme="light"] .pb-grid {
+  background-image: radial-gradient(circle, rgba(42, 29, 20, 0.08) 1.5px, transparent 1.5px);
+}
+
+/* Pedalboard presets-actions footer */
+:root[data-theme="light"] .pb-presets-actions {
+  background: rgba(42, 29, 20, 0.06);
+}
+
+/* Pedalboard palette popup */
+:root[data-theme="light"] .pb-palette {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+}
+:root[data-theme="light"] .pb-palette-item:hover:not(:disabled) {
+  background: rgba(42, 29, 20, 0.08);
+}
+
+/* Pedalboard context menu */
+:root[data-theme="light"] .pb-menu {
+  background: var(--panel-2);
+  border-color: var(--line-strong);
+  color: var(--fg);
+}
+:root[data-theme="light"] .pb-menu input.pb-mrange {
+  background: linear-gradient(var(--screen-2), var(--screen-2)) center / 100% 6px no-repeat;
+}
+:root[data-theme="light"] .pb-menu-file {
+  background: rgba(42, 29, 20, 0.06);
+  border-color: var(--line);
+}
+
+/* Pedalboard preset row hover */
+:root[data-theme="light"] .pb-preset-row:hover {
+  background: rgba(42, 29, 20, 0.05);
+}
+
+/* pb-jack body */
+:root[data-theme="light"] .pb-jack {
+  background: var(--screen-2);
+}
+:root[data-theme="light"] .pb-jack.is-valid-target {
+  background: color-mix(in srgb, var(--good) 25%, var(--screen-2));
+}
+
+/* IO tile */
+:root[data-theme="light"] .pb-tile.is-io {
+  background: var(--panel);
+}

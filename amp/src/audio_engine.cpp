@@ -1,5 +1,8 @@
 #include "audio_engine.h"
 
+#include <chrono>
+#include <thread>
+
 #include <windows.h>
 #include <pmmintrin.h>
 #include <xmmintrin.h>
@@ -442,6 +445,33 @@ void AudioEngine::closeStreamLocked() {
     activeDeviceIndex_ = paNoDevice;
 }
 
+bool AudioEngine::rescanDevices() {
+    std::lock_guard<std::mutex> lock(streamMutex_);
+    if (stream_ != nullptr && running_.load(std::memory_order_acquire) && streamAlive()) {
+        // Fade the output to silence before stopping (a hard stop mid-signal pops): ~10 ms ramp, then wait
+        // two buffers so the silent ones reach the interface.
+        fadeOut_.store(true, std::memory_order_release);
+        const double rate = (actualSampleRate_ > 1.0) ? actualSampleRate_ : 48000.0;
+        const int frames = std::max(64, bufferFrames_.load(std::memory_order_relaxed));
+        const int waitMs = std::clamp(static_cast<int>(20.0 + 2000.0 * frames / rate), 20, 200);
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
+    }
+    closeMonitorStreamLocked();
+    closeStreamLocked();
+    if (paInitialized_) {
+        Pa_Terminate();
+        paInitialized_ = false;
+    }
+    rescans_.fetch_add(1, std::memory_order_relaxed);
+    const PaError err = Pa_Initialize();
+    if (err != paNoError) {
+        lastError_ = std::string("PortAudio init failed: ") + Pa_GetErrorText(err);
+        return false;
+    }
+    paInitialized_ = true;
+    return true;
+}
+
 void AudioEngine::stopStream() {
     std::lock_guard<std::mutex> lock(streamMutex_);
     closeMonitorStreamLocked();
@@ -637,6 +667,9 @@ bool AudioEngine::restart(const std::string& requestedDeviceName, int inputChann
         chain_.prepare(actualSampleRate_, kMaxBlock);
     }
 
+    fadeOut_.store(false, std::memory_order_relaxed);
+    outGain_ = 0.0f;   // fade in: no pop when the stream comes (back) up
+    lastCallbackQpc_.store(0, std::memory_order_relaxed);
     err = Pa_StartStream(newStream);
     if (err != paNoError) {
         lastError_ = std::string("ASIO start failed: ") + Pa_GetErrorText(err);
@@ -859,6 +892,7 @@ int AudioEngine::handleCallback(const void* input,
     _mm_setcsr(_mm_getcsr() | 0x8040);
     LARGE_INTEGER qpcStart{};
     QueryPerformanceCounter(&qpcStart);
+    lastCallbackQpc_.store(qpcStart.QuadPart, std::memory_order_relaxed);
 
     if ((statusFlags & (paInputOverflow | paOutputUnderflow)) != 0) {
         xruns_.fetch_add(1, std::memory_order_relaxed);
@@ -950,7 +984,17 @@ int AudioEngine::handleCallback(const void* input,
             }
         }
 
-        // 4. Write to output L and R + measure output peak
+        // 4. Fade in after a (re)start, out before a rescan stops the stream; then write L and R + output peak
+        {
+            const float target = fadeOut_.load(std::memory_order_relaxed) ? 0.0f : 1.0f;
+            if (outGain_ != target || target < 1.0f) {
+                const float step = 1.0f / 480.0f;
+                for (int i = 0; i < chunk; ++i) {
+                    outGain_ = (outGain_ < target) ? std::min(target, outGain_ + step) : std::max(target, outGain_ - step);
+                    workBuf_[i] *= outGain_;
+                }
+            }
+        }
         for (int i = 0; i < chunk; ++i) {
             const float y = workBuf_[i];
             const float ay = (y < 0.0f) ? -y : y;
@@ -1076,6 +1120,16 @@ int AudioEngine::handleMonitorCallback(void* output, unsigned long frameCount) n
     }
 
     return paContinue;
+}
+
+bool AudioEngine::streamAlive() const noexcept {
+    // Callbacks stop when the interface disappears (unplugged) even though PortAudio still holds the stream.
+    const int64_t last = lastCallbackQpc_.load(std::memory_order_relaxed);
+    if (!running_.load(std::memory_order_acquire)) return false;
+    if (last == 0 || invQpcFreq_ <= 0.0) return true;   // just started: give it the benefit of the doubt
+    LARGE_INTEGER now{};
+    QueryPerformanceCounter(&now);
+    return static_cast<double>(now.QuadPart - last) * invQpcFreq_ < 0.5;
 }
 
 AudioStatus AudioEngine::getStatus() {

@@ -233,8 +233,27 @@ export const DEFAULT_SETTINGS = {
   countIn: true,
   showNoteNames: false,
   leftHanded: false,
+  showFingering: false,
+  fingeringOffMigrated: true,
   setupDone: false
 };
+
+/**
+ * One-time fixes to settings saved by older versions. Takes the raw saved object (before defaults are
+ * merged in) and returns { settings, changed }.
+ * - fingeringOffMigrated: the play-screen fingering strip used to be on by default; nobody chose that,
+ *   so it is switched off once. After that the user's own choice sticks.
+ */
+export function migrateSettings(saved) {
+  const out = { ...(saved || {}) };
+  let changed = false;
+  if (!out.fingeringOffMigrated) {
+    out.showFingering = false;
+    out.fingeringOffMigrated = true;
+    changed = true;
+  }
+  return { settings: out, changed };
+}
 
 class SettingsStore {
   constructor() {
@@ -248,8 +267,9 @@ class SettingsStore {
       if (typeof localStorage !== 'undefined') {
         const raw = localStorage.getItem(SETTINGS_KEY);
         if (raw) {
-          const parsed = JSON.parse(raw);
+          const { settings: parsed, changed } = migrateSettings(JSON.parse(raw));
           this._cache = { ...DEFAULT_SETTINGS, ...parsed };
+          if (changed) this._save();
         }
       }
     } catch (_) {

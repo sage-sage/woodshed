@@ -290,20 +290,9 @@
   color: var(--fg-muted);
 }
 
-.deck-loop-select {
-  padding: 4px 6px;
-  font-size: 12px;
-  font-family: var(--font-mono);
-}
-
 .deck-loop-sep {
   color: var(--fg-faint);
   font-size: 12px;
-}
-
-.deck-loop-clear {
-  padding: 4px 8px;
-  font-size: 11px;
 }
 
 /* Rotary Knobs */
@@ -815,18 +804,12 @@
   padding: 7px 10px;
 }
 
-/* Laptop widths: icon-only Restart so transport and knobs share one row more often. */
-@media (max-width: 1399px) {
-  .deck-restart-btn span {
-    display: none;
-  }
-
-  .deck-restart-btn {
-    width: 44px;
-    height: 44px;
-    padding: 0;
-    justify-content: center;
-  }
+/* Restart is icon-only (its name is in the tooltip and aria-label). */
+.deck-restart-btn {
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  justify-content: center;
 }
 
 /* The YouTube video sits at the right, just under the highway (beside the fingering fretboard), so it never covers the track. */
@@ -858,4 +841,272 @@
   width: auto;
   min-width: 0;
   border-top: 0;
+}
+
+/* === Decluttered deck (2026-11-16): one row of grouped controls; rarely changed settings sit in "More".
+   The highway and fingering strip get the height the second deck row used to take. === */
+.play-hud-bar {
+  gap: 12px 16px;
+}
+
+.hud-metrics {
+  gap: 20px;
+}
+
+.hud-stat-value {
+  font-size: 22px;
+}
+
+.hud-position {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  color: var(--fg-muted);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.hud-position-sep {
+  color: var(--fg-faint);
+}
+
+.play-screen {
+  padding: 10px 14px;
+}
+
+.play-deck {
+  flex-wrap: wrap;
+  gap: 10px 0;
+  padding: 10px 14px;
+}
+
+.play-layout > * {
+  min-width: 0;
+}
+
+.deck-group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 16px;
+  border-left: 1px solid var(--line);
+  flex: 0 0 auto;
+}
+
+.deck-group:first-child {
+  padding-left: 0;
+  border-left: 0;
+}
+
+.play-btn-main {
+  width: 52px;
+  height: 52px;
+  flex-basis: 52px;
+}
+
+/* Loop: on/off toggle + two typed bar boxes */
+.deck-loop {
+  background: none;
+  border-radius: 0;
+  border-top: 0;
+  border-right: 0;
+  border-bottom: 0;
+  padding: 0 16px;
+  gap: 8px;
+}
+
+.deck-loop-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+  background: var(--screen);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm, 8px);
+  cursor: pointer;
+}
+
+.deck-loop-toggle:hover {
+  color: var(--fg);
+}
+
+.deck-loop-toggle:focus-visible {
+  outline: 2px solid var(--focus, var(--accent));
+  outline-offset: 2px;
+}
+
+.deck-loop-led {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--line-strong);
+  box-shadow: inset 0 1px 1px rgba(0, 0, 0, 0.5);
+}
+
+.deck-loop-toggle.is-on {
+  color: var(--accent-ink);
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+.deck-loop-toggle.is-on .deck-loop-led {
+  background: var(--hot);
+  box-shadow: 0 0 6px var(--hot);
+}
+
+.deck-loop-field {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.deck-loop-input {
+  width: 4.2em;
+  height: 34px;
+  padding: 4px 6px;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 13px;
+  text-align: center;
+}
+
+.deck-loop.is-off .deck-loop-input {
+  color: var(--fg-muted);
+}
+
+.deck-loop-sep {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  text-transform: uppercase;
+  color: var(--fg-faint);
+}
+
+/* Speed: a knob with its label beside it, so the deck stays one row */
+.amp-knob--inline {
+  flex-direction: row;
+  gap: 10px;
+}
+
+.amp-knob--inline .amp-knob-dial {
+  width: 40px;
+  height: 40px;
+}
+
+.amp-knob-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.deck-practice .deck-mode-group .seg-btn {
+  padding: 7px 12px;
+}
+
+/* "More" popover */
+.deck-more {
+  position: relative;
+  margin-left: auto;
+  padding-left: 16px;
+  flex: 0 0 auto;
+}
+
+.deck-more-caret {
+  display: inline-block;
+  margin-left: 4px;
+  font-size: 10px;
+  transition: transform 0.12s ease;
+}
+
+.deck-more-btn.is-open .deck-more-caret {
+  transform: rotate(180deg);
+}
+
+.deck-more-panel {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 14px);
+  z-index: 30;
+  width: max-content;
+  max-width: min(560px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 18px;
+  background-color: var(--panel);
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius, 12px);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.55);
+}
+
+.deck-more-panel.hidden {
+  display: none;
+}
+
+.deck-more-section {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.deck-more-section + .deck-more-section {
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+}
+
+.deck-more-title {
+  width: 100%;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--fg-muted);
+}
+
+.deck-more-panel .deck-knobs {
+  gap: 22px;
+  padding-top: 6px;
+}
+
+.deck-more-panel .amp-knob-dial {
+  width: 46px;
+  height: 46px;
+}
+
+.play-tone-chip {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+/* Narrower laptops: drop the group padding a little before anything wraps. */
+@media (max-width: 1279px) {
+  .deck-group {
+    padding: 0 10px;
+  }
+  .deck-more {
+    padding-left: 10px;
+  }
+}
+
+@media (max-width: 899px) {
+  .play-deck {
+    flex-direction: row;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 10px 0;
+  }
+  .deck-more-panel .deck-knobs {
+    display: flex;
+  }
 }

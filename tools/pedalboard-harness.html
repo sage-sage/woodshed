@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="../css/views.css" />
 <link rel="stylesheet" href="../css/pedalboard.css" />
 <link rel="stylesheet" href="../css/pedal-art.css" />
+<link rel="stylesheet" href="../css/theme.css" />
 <base href="../" />
 <style>html, body { height: 100%; margin: 0; } #main { height: 100vh; }</style>
 </head>
@@ -26,6 +27,7 @@ const blockTypes = [
   { id: 'ir', name: 'Impulse response', category: 'cab', usesFile: true, fileKind: 'ir', params: [P('level', 'Level', -24, 12, 0, 0.5, 'dB')] },
   { id: 'eq', name: 'EQ', category: 'eq', params: [P('low', 'Low', -15, 15, 0, 0.5, 'dB'), P('mid', 'Mid', -15, 15, 0, 0.5, 'dB'), P('high', 'High', -15, 15, 0, 0.5, 'dB')] },
   { id: 'overdrive', name: 'Overdrive', category: 'drive', params: [P('drive', 'Drive', 0, 1, 0.4, 0.01), P('level', 'Level', -24, 12, -6, 0.5, 'dB')] },
+  { id: 'metal', name: 'Metal distortion', category: 'drive', params: [P('gain', 'Gain', 0, 10, 7, 0.1), P('tight', 'Tight', 40, 250, 110, 1, 'Hz'), P('low', 'Low', -12, 12, 2, 0.5, 'dB'), P('mid', 'Mid', -15, 12, -4, 0.5, 'dB'), P('high', 'High', -12, 12, 2, 0.5, 'dB'), P('level', 'Level', -36, 6, -12, 0.5, 'dB'), P('gate', 'Gate', -80, -30, -62, 1, 'dB')] },
   { id: 'chorus', name: 'Chorus', category: 'modulation', params: [P('rate', 'Rate', 0.05, 5, 0.6, 0.01, 'Hz'), P('depth', 'Depth', 0, 1, 0.5, 0.01), P('delay', 'Delay', 2, 20, 8, 0.1, 'ms'), P('feedback', 'Feedback', 0, 0.9, 0.2, 0.01), P('mix', 'Mix', 0, 1, 0.5, 0.01)] },
   { id: 'flanger', name: 'Flanger', category: 'modulation', params: [P('rate', 'Rate', 0.05, 5, 0.3, 0.01, 'Hz'), P('depth', 'Depth', 0, 1, 0.5, 0.01), P('delay', 'Delay', 0.1, 7, 1, 0.1, 'ms'), P('feedback', 'Feedback', 0, 0.95, 0.6, 0.01), P('mix', 'Mix', 0, 1, 0.5, 0.01)] },
   { id: 'phaser', name: 'Phaser', category: 'modulation', params: [P('rate', 'Rate', 0.05, 5, 0.4, 0.01, 'Hz'), P('depth', 'Depth', 0, 1, 0.8, 0.01), P('freq', 'Center', 200, 3000, 700, 10, 'Hz'), P('feedback', 'Feedback', 0, 0.9, 0.3, 0.01), P('stages', 'Stages', 0, 3, 1, 1, '', ['2', '4', '6', '8']), P('mix', 'Mix', 0, 1, 0.5, 0.01)] },
@@ -36,11 +38,15 @@ const blockTypes = [
   { id: 'mixer', name: 'Mixer', category: 'utility', inputs: 2, params: [P('balance', 'A / B', 0, 1, 0.5, 0.01), P('level', 'Level', -24, 12, 0, 0.5, 'dB')] },
   { id: 'volume', name: 'Volume', category: 'utility', params: [P('level', 'Level', -60, 12, 0, 0.5, 'dB')] },
 ];
-const order = ['volume', 'overdrive', 'amp', 'nam', 'cab', 'ir', 'eq', 'chorus', 'flanger', 'phaser', 'tremolo', 'autowah', 'delay', 'reverb', 'mixer'];
-const nodes = order.map((type, k) => ({ uid: 'n' + k, type, x: 10 + (k % 5) * 9, y: 2 + Math.floor(k / 5) * 6, enabled: true,
+const order = ['volume', 'overdrive', 'metal', 'amp', 'nam', 'cab', 'ir', 'eq', 'chorus', 'flanger', 'phaser', 'tremolo', 'autowah', 'delay', 'reverb', 'mixer'];
+// ?row=N lays the first N blocks out in one row, the way the amp lays out its own presets (x = 10 + 9i, y = 5).
+const rowN = Number(new URLSearchParams(location.search).get('row')) || 0;
+const nodes = order.slice(0, rowN || order.length).map((type, k) => ({ uid: 'n' + k, type, enabled: true,
+  x: rowN ? 10 + 9 * k : 10 + (k % 5) * 9, y: rowN ? 5 : 2 + Math.floor(k / 5) * 6,
   params: Object.fromEntries(blockTypes.find((b) => b.id === type).params.map((p) => [p.key, p.def])) }));
 const cables = [{ from: 'in', to: 'n0' }, ...nodes.slice(1).map((n, k) => ({ from: nodes[k].uid, to: n.uid })), { from: nodes[nodes.length - 1].uid, to: 'out' }];
-const preset = { id: 'harness', name: 'Harness board', builtin: false, graph: { nodes, cables, io: { inX: 1, inY: 8, outX: 56, outY: 8 }, inputTrimDb: 0, outputLevelDb: 0 } };
+const io = rowN ? { inX: 1, inY: 6, outX: 10 + 9 * rowN, outY: 6 } : { inX: 1, inY: 8, outX: 56, outY: 8 };
+const preset = { id: 'harness', name: 'Harness board', builtin: false, graph: { nodes, cables, io, inputTrimDb: 0, outputLevelDb: 0 } };
 
 class FakeAmp extends EventTarget {
   constructor() { super(); this.state = 'online'; this.serverInfo = { version: '2.2.0' }; this.status = { preset: 'harness' };

@@ -1,13 +1,19 @@
 import { isDesktop, desktop, postToHost } from './desktop.js';
-import { hasPedalArt, pedalSize, pedalArtHtml, mountPedalArt } from './pedal-art.js';
+import { makeWheelClassifier, wheelZoomFactor } from './board-input.js';
+import { hasPedalArt, pedalSize, pedalArtHtml, mountPedalArt, setPedalArtPaused, artStats } from './pedal-art.js';
 
-const CELL_PX = 36;
-const TILE_W = 140;
-const TILE_H = 80;
-const PEDAL_SCALE = 0.5;
-const ZOOM_MIN = 0.3;
-const ZOOM_MAX = 1.5;
+// World units: the amp stores tile positions in grid cells (blocks 9 cells apart, rows 6 apart).
+const CELL_PX = 54;
+const TILE_W = 180;
+const TILE_H = 96;
+const PEDAL_SCALE = 0.9;
+const PEDAL_MAX_W = 408;   // wide pedals shrink so they fit between blocks (9 cells = 486 px) with room for cables
+const PEDAL_MAX_H = 300;   // tall pedals shrink so they fit between rows (6 cells = 324 px)
+const ZOOM_MIN = 0.2;
+const ZOOM_MAX = 2;
 const ZOOM_STEP = 0.1;
+const FIT_MIN_ZOOM = 0.45;
+const LONG_PRESS_MS = 550;
 
 const PEDAL_CAT_COLORS = {
   amp: '#c08752',
@@ -204,7 +210,17 @@ export function mount(container, ctx) {
   let confirmDeleteOpen = false;
   let renaming = false;
   let activeInteraction = null;
-  const boardArt = new Map();
+  // The tile menu (right-click or long-press): { uid } for a tile, { cable } for a cable; x/y = where it opened.
+  let menu = null;
+  let presetsHidden = false;
+  try { presetsHidden = settings?.get?.('pedalboardPresetsHidden') === true; } catch (_) { /* optional */ }
+  // Mounted pedal art, kept across re-renders so the pedals don't reload and restart on every change.
+  // key `${presetId}|${uid}` -> { type, el, ctl, node, last: {param: value} }
+  const artCache = new Map();
+  const artKey = (presetId, uid) => `${presetId}|${uid}`;
+  let movingTimer = 0;
+
+  const classifyWheel = makeWheelClassifier();
 
   const viewStateByPreset = new Map();
   const faderRafs = new Map();
@@ -316,11 +332,10 @@ export function mount(container, ctx) {
 
   function tileSizeFor(node) {
     const s = node && hasPedalArt(node.type) ? pedalSize(node.type) : null;
-    // Half size, but tall pedals shrink a little more so they fit between rows (the amp spaces rows 6 cells apart).
-    const k = s ? Math.min(PEDAL_SCALE, 200 / s.h) : 1;
+    const k = s ? Math.min(PEDAL_SCALE, PEDAL_MAX_W / s.w, PEDAL_MAX_H / s.h) : 1;
     return s
-      ? { w: Math.round(s.w * k), h: Math.round(s.h * k), pedal: true }
-      : { w: TILE_W, h: TILE_H, pedal: false };
+      ? { w: Math.round(s.w * k), h: Math.round(s.h * k), k: Math.round(s.w * k) / s.w, pedal: true }
+      : { w: TILE_W, h: TILE_H, k: 1, pedal: false };
   }
 
   function getJackPos(graph, blockTypeMap, uid, kind, port = 0) {
@@ -345,7 +360,7 @@ export function mount(container, ctx) {
     const bt = blockTypeMap.get(node.type);
     const inputs = bt?.inputs || (node.type === 'mixer' ? 2 : 1);
     if (inputs >= 2) {
-      const py = pedal ? (Number(port) === 1 ? h * 0.65 : h * 0.35) : (Number(port) === 1 ? 56 : 24);
+      const py = Number(port) === 1 ? h * 0.65 : h * 0.35;
       return { x, y: y + py };
     }
     return { x, y: y + h / 2 };
@@ -513,7 +528,7 @@ export function mount(container, ctx) {
             data-uid="${escapeHtml(node.uid)}" tabindex="0" aria-label="${escapeHtml(name)} tile"
             ${isDisconnected ? 'title="Not connected"' : ''}
             style="left:${node.x * CELL_PX}px;top:${node.y * CELL_PX}px;width:${size.w}px;height:${size.h}px;--cat:${catColor};">
-            <div class="pb-pedal-art">${pedalArtHtml(node.type)}</div>
+            <div class="pb-pedal-art"></div>
             ${inJacksHtml}
             <div class="pb-jack is-out" data-uid="${escapeHtml(node.uid)}" data-dir="out" data-port="0" title="Output jack"></div>
           </div>
@@ -586,11 +601,12 @@ export function mount(container, ctx) {
         `).join('');
     })();
 
-    const inspectorHtml = renderInspector(preset, graph, nodes, blockTypeMap);
-    const hasInspectorOpen = Boolean(selectedUid || selectedCable);
+    if (menu?.uid && menu.uid !== 'in' && menu.uid !== 'out' && !nodes.some((n) => n.uid === menu.uid)) menu = null;
+    if (menu?.cable && !cables.some((c) => sameCable(c, menu.cable))) menu = null;
+    const menuHtml = renderMenu(graph, nodes, blockTypeMap);
 
     container.innerHTML = `
-      <div class="pb-shell${drawerOpen ? ' is-drawer-open' : ''}${hasInspectorOpen ? ' has-selection' : ''}">
+      <div class="pb-shell${drawerOpen ? ' is-drawer-open' : ''}${presetsHidden ? ' is-presets-hidden' : ''}">
         <aside class="pb-presets" aria-label="Presets">
           <div class="pb-presets-scroll">
             <div class="pb-presets-heading">Presets</div>
@@ -614,7 +630,7 @@ export function mount(container, ctx) {
 
         <header class="pb-toolbar">
           <div class="pb-toolbar-left">
-            <button type="button" class="btn btn-sm pb-presets-toggle" id="pb-toggle-presets" aria-expanded="${drawerOpen ? 'true' : 'false'}">Presets</button>
+            <button type="button" class="btn btn-sm pb-presets-toggle" id="pb-toggle-presets" aria-expanded="${drawerOpen || !presetsHidden ? 'true' : 'false'}" title="Show or hide the preset list">Presets</button>
             ${renaming && isCustom ? `
               <input type="text" class="input pb-rename-input" id="pb-rename-input" maxlength="40" value="${escapeHtml(preset.name || '')}" aria-label="Preset name" />
             ` : `
@@ -642,6 +658,7 @@ export function mount(container, ctx) {
               <button type="button" class="btn btn-sm btn-ghost" id="pb-zoom-out" aria-label="Zoom out">−</button>
               <button type="button" class="btn btn-sm btn-ghost tabular" id="pb-zoom-reset" title="Reset zoom to 100%">${Math.round(view.zoom * 100)}%</button>
               <button type="button" class="btn btn-sm btn-ghost" id="pb-zoom-in" aria-label="Zoom in">+</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="pb-zoom-fit" title="Show the whole board">Fit</button>
             </div>
             <div class="pb-palette-wrap">
               <button type="button" class="btn btn-sm btn-primary" id="pb-btn-add" aria-expanded="${paletteOpen ? 'true' : 'false'}" ${blockTypes.length === 0 ? 'disabled' : ''}>+ Add tile</button>
@@ -655,8 +672,8 @@ export function mount(container, ctx) {
           </div>
         </header>
 
-        <div class="pb-viewport" id="pb-viewport"
-          style="background-size:${CELL_PX * view.zoom}px ${CELL_PX * view.zoom}px;background-position:${view.panX}px ${view.panY}px;">
+        <div class="pb-viewport" id="pb-viewport">
+          <div class="pb-grid" id="pb-grid" aria-hidden="true"></div>
           <div class="pb-world" id="pb-world" style="transform:translate(${view.panX}px, ${view.panY}px) scale(${view.zoom});">
             <svg class="pb-cables-svg" id="pb-cables-svg">
               ${cablesSvgHtml}
@@ -667,198 +684,145 @@ export function mount(container, ctx) {
               ${effectTilesHtml}
             </div>
           </div>
+          <div class="pb-hint" aria-hidden="true">Right-click a pedal for its controls · drag empty space or two-finger scroll to move · wheel or pinch to zoom</div>
         </div>
 
-        <aside class="pb-inspector" id="pb-inspector" aria-label="Tile inspector">
-          ${inspectorHtml}
-        </aside>
+        ${menuHtml}
       </div>
     `;
 
     bindEvents(preset, graph, nodes, cables, blockTypeMap);
   }
 
-  function renderInspector(preset, graph, nodes, blockTypeMap) {
-    if (selectedCable) {
-      const fromName = selectedCable.from === 'in'
-        ? 'INPUT'
-        : (blockTypeMap.get(nodes.find((n) => n.uid === selectedCable.from)?.type)?.name || selectedCable.from);
-      const toNode = nodes.find((n) => n.uid === selectedCable.to);
-      const toName = selectedCable.to === 'out'
-        ? 'OUTPUT'
-        : (blockTypeMap.get(toNode?.type)?.name || selectedCable.to);
+  // Compact controls for one tile or cable, opened by right-click / long-press (replaces the docked inspector).
+  function renderMenu(graph, nodes, blockTypeMap) {
+    if (!menu) return '';
+    const head = (title, extra = '') => `
+      <div class="pb-menu-head">
+        ${extra}
+        <span class="pb-menu-title" title="${escapeHtml(title)}">${escapeHtml(title)}</span>
+        <button type="button" class="btn btn-sm btn-ghost pb-menu-close" id="pb-menu-close" aria-label="Close">×</button>
+      </div>`;
+    const rangeRow = ({ cls, dataAttrs, valAttr, label, min, max, step, value, shown }) => `
+      <label class="pb-mrow">
+        <span class="pb-mrow-label">${escapeHtml(label)}</span>
+        <input type="range" class="slider pb-mrange ${cls}" ${dataAttrs} min="${min}" max="${max}" step="${step}" value="${value}" aria-label="${escapeHtml(label)}" />
+        <span class="pb-mrow-val tabular" ${valAttr}>${escapeHtml(shown)}</span>
+      </label>`;
+    const wrap = (inner, label, style = '') => `
+      <div class="pb-menu" id="pb-menu" role="dialog" aria-label="${escapeHtml(label)}" style="${style}">${inner}</div>`;
+
+    if (menu.cable) {
+      const c = menu.cable;
+      const nameOf = (uid) => (uid === 'in' ? 'INPUT' : uid === 'out' ? 'OUTPUT'
+        : (blockTypeMap.get(nodes.find((n) => n.uid === uid)?.type)?.name || uid));
+      const toNode = nodes.find((n) => n.uid === c.to);
       const toBt = toNode ? blockTypeMap.get(toNode.type) : null;
       const isMixer = toNode && (toNode.type === 'mixer' || toBt?.inputs === 2);
-      const portLabel = isMixer ? ` (Input ${Number(selectedCable.port) === 1 ? 'B' : 'A'})` : '';
-
-      return `
-        <div class="pb-insp-head">
-          <span class="pb-insp-title">Cable</span>
-          <button type="button" class="btn btn-sm btn-ghost pb-insp-close" id="pb-insp-close" aria-label="Close inspector">×</button>
+      const portLabel = isMixer ? ` (Input ${Number(c.port) === 1 ? 'B' : 'A'})` : '';
+      return wrap(`
+        ${head('Cable')}
+        <div class="pb-menu-body">
+          <p class="pb-menu-route"><strong>${escapeHtml(nameOf(c.from))}</strong> → <strong>${escapeHtml(nameOf(c.to) + portLabel)}</strong></p>
         </div>
-        <div class="pb-insp-body">
-          <p class="pb-insp-cable-route"><strong>${escapeHtml(fromName)}</strong> → <strong>${escapeHtml(toName)}${escapeHtml(portLabel)}</strong></p>
-          <button type="button" class="btn btn-sm pb-btn-danger" id="pb-insp-remove-cable">Remove cable</button>
-        </div>
-      `;
+        <div class="pb-menu-actions">
+          <button type="button" class="btn btn-sm pb-btn-danger" id="pb-menu-remove-cable">Remove cable</button>
+        </div>`, 'Cable');
     }
 
-    if (selectedUid === 'in') {
+    const globalRow = (key, label, min, max, step, value, isGate) => rangeRow({
+      cls: 'pb-global-slider',
+      dataAttrs: `data-global-key="${key}" data-is-gate="${isGate ? 1 : 0}"`,
+      valAttr: `data-pb-global-val="${key}"`,
+      label, min, max, step, value,
+      shown: formatBoardVal({ unit: 'dB', isGate }, value)
+    });
+
+    if (menu.uid === 'in') {
       const trimVal = Number.isFinite(graph.inputTrimDb) ? graph.inputTrimDb : 0;
       const gateVal = Number.isFinite(graph.gateThresholdDb) ? graph.gateThresholdDb : -80;
-      return `
-        <div class="pb-insp-head">
-          <span class="pb-insp-title">INPUT</span>
-          <button type="button" class="btn btn-sm btn-ghost pb-insp-close" id="pb-insp-close" aria-label="Close inspector">×</button>
-        </div>
-        <div class="pb-insp-body">
-          <div class="pedal-faders">
-            <label class="fader">
-              <span class="fader-val tabular" data-pb-global-val="inputTrimDb">${escapeHtml(formatBoardVal({ unit: 'dB' }, trimVal))}</span>
-              <span class="fader-slot">
-                <input type="range" class="fader-input pb-global-slider" data-global-key="inputTrimDb" data-is-gate="0"
-                  min="-24" max="24" step="0.5" value="${trimVal}" aria-label="Trim" />
-              </span>
-              <span class="fader-label">Trim</span>
-            </label>
-            <label class="fader">
-              <span class="fader-val tabular" data-pb-global-val="gateThresholdDb">${escapeHtml(formatBoardVal({ unit: 'dB', isGate: true }, gateVal))}</span>
-              <span class="fader-slot">
-                <input type="range" class="fader-input pb-global-slider" data-global-key="gateThresholdDb" data-is-gate="1"
-                  min="-80" max="0" step="1" value="${gateVal}" aria-label="Gate" />
-              </span>
-              <span class="fader-label">Gate</span>
-            </label>
-          </div>
-        </div>
-      `;
+      return wrap(`
+        ${head('INPUT')}
+        <div class="pb-menu-body">
+          ${globalRow('inputTrimDb', 'Trim', -24, 24, 0.5, trimVal, false)}
+          ${globalRow('gateThresholdDb', 'Gate', -80, 0, 1, gateVal, true)}
+        </div>`, 'Input');
     }
 
-    if (selectedUid === 'out') {
+    if (menu.uid === 'out') {
       const outVal = Number.isFinite(graph.outputLevelDb) ? graph.outputLevelDb : 0;
-      return `
-        <div class="pb-insp-head">
-          <span class="pb-insp-title">OUTPUT</span>
-          <button type="button" class="btn btn-sm btn-ghost pb-insp-close" id="pb-insp-close" aria-label="Close inspector">×</button>
-        </div>
-        <div class="pb-insp-body">
-          <div class="pedal-faders">
-            <label class="fader">
-              <span class="fader-val tabular" data-pb-global-val="outputLevelDb">${escapeHtml(formatBoardVal({ unit: 'dB' }, outVal))}</span>
-              <span class="fader-slot">
-                <input type="range" class="fader-input pb-global-slider" data-global-key="outputLevelDb" data-is-gate="0"
-                  min="-60" max="24" step="0.5" value="${outVal}" aria-label="Level" />
-              </span>
-              <span class="fader-label">Level</span>
-            </label>
-          </div>
-        </div>
-      `;
+      return wrap(`
+        ${head('OUTPUT')}
+        <div class="pb-menu-body">
+          ${globalRow('outputLevelDb', 'Level', -60, 24, 0.5, outVal, false)}
+        </div>`, 'Output');
     }
 
-    const node = selectedUid ? nodes.find((n) => n.uid === selectedUid) : null;
-    if (!node) {
-      return `
-        <div class="pb-insp-head">
-          <span class="pb-insp-title">Inspector</span>
-        </div>
-        <div class="pb-insp-body">
-          <p class="pb-insp-help">Drag from a tile's right jack to another tile's left jack to connect. Click a cable to select it, Delete removes it. Drop a tile on a cable to insert it.</p>
-        </div>
-      `;
-    }
-
+    const node = nodes.find((n) => n.uid === menu.uid);
+    if (!node) return '';
     const bt = blockTypeMap.get(node.type);
     const name = bt?.name || node.type;
     const catColor = PEDAL_CAT_COLORS[bt?.category] || '#8f8a80';
     const isEnabled = node.enabled !== false;
     const paramSpecs = Array.isArray(bt?.params) ? bt.params : [];
-    const continuousSpecs = paramSpecs.filter((ps) => !(Array.isArray(ps.options) && ps.options.length > 0));
-    const optionSpecs = paramSpecs.filter((ps) => Array.isArray(ps.options) && ps.options.length > 0);
     const fileKind = bt?.fileKind || (node.type === 'cab' ? 'ir' : 'nam');
     const isFileMissing = Boolean(node.file && (node.fileMissing || node.missing || node.fileFound === false));
 
     const fileRowHtml = (bt?.usesFile || node.file) ? `
-      <div class="pb-insp-file">
-        <div class="pb-insp-file-top">
-          <span class="pb-insp-file-name" title="${escapeHtml(node.file || 'No file')}">${escapeHtml(node.file || 'No file')}</span>
-          ${isFileMissing ? '<span class="chip pb-missing-badge">missing</span>' : ''}
-        </div>
-        <div class="pb-insp-file-btns">
-          <button type="button" class="btn btn-sm" id="pb-insp-browse" data-kind="${escapeHtml(fileKind)}">Load</button>
-          ${node.file ? `<button type="button" class="btn btn-sm btn-ghost" id="pb-insp-clear" data-kind="${escapeHtml(fileKind)}">Clear</button>` : ''}
-        </div>
+      <div class="pb-menu-file">
+        <span class="pb-menu-file-name" title="${escapeHtml(node.file || 'No file')}">${escapeHtml(node.file || 'No file')}</span>
+        ${isFileMissing ? '<span class="chip pb-missing-badge">missing</span>' : ''}
+        <button type="button" class="btn btn-sm" id="pb-menu-browse" data-kind="${escapeHtml(fileKind)}">Load</button>
+        ${node.file ? `<button type="button" class="btn btn-sm btn-ghost" id="pb-menu-clear" data-kind="${escapeHtml(fileKind)}">Clear</button>` : ''}
       </div>
     ` : '';
 
-    const fadersHtml = continuousSpecs.length > 0 ? `
-      <div class="pedal-faders">
-        ${continuousSpecs.map((ps) => {
-          const min = Number.isFinite(ps.min) ? ps.min : 0;
-          const max = Number.isFinite(ps.max) ? ps.max : 10;
-          const step = Number.isFinite(ps.step) && ps.step > 0 ? ps.step : 0.01;
-          const cur = Number.isFinite(node.params?.[ps.key]) ? node.params[ps.key] : (Number.isFinite(ps.def) ? ps.def : min);
+    const paramRows = paramSpecs.map((ps) => {
+      const label = ps.label || ps.key;
+      if (Array.isArray(ps.options) && ps.options.length > 0) {
+        const curIdx = Math.round(Number.isFinite(node.params?.[ps.key]) ? node.params[ps.key] : (Number.isFinite(ps.def) ? ps.def : 0));
+        if (ps.options.length <= 3) {
           return `
-            <label class="fader">
-              <span class="fader-val tabular" data-pb-param-val="${escapeHtml(ps.key)}">${escapeHtml(formatBoardVal(ps, cur))}</span>
-              <span class="fader-slot">
-                <input type="range" class="fader-input pb-param-slider"
-                  data-param-key="${escapeHtml(ps.key)}" data-unit="${escapeHtml(ps.unit || '')}"
-                  data-min="${min}" data-max="${max}" data-step="${step}"
-                  min="${min}" max="${max}" step="${step}" value="${cur}" aria-label="${escapeHtml(ps.label || ps.key)}" />
-              </span>
-              <span class="fader-label">${escapeHtml(ps.label || ps.key)}</span>
-            </label>
-          `;
-        }).join('')}
-      </div>
-    ` : '';
-
-    const optionsHtml = optionSpecs.length > 0 ? `
-      <div class="pedal-opts" style="--cat:${catColor};">
-        ${optionSpecs.map((ps) => {
-          const curIdx = Math.round(Number.isFinite(node.params?.[ps.key]) ? node.params[ps.key] : (Number.isFinite(ps.def) ? ps.def : 0));
-          if (ps.options.length <= 3) {
-            return `
-              <div class="pedal-param-opt">
-                <span class="fader-label">${escapeHtml(ps.label || ps.key)}</span>
-                <div class="pedal-seg" role="group" aria-label="${escapeHtml(ps.label || ps.key)}">
-                  ${ps.options.map((opt, optIdx) => `
-                    <button type="button" class="pedal-seg-btn${curIdx === optIdx ? ' is-active' : ''}"
-                      data-param-key="${escapeHtml(ps.key)}" data-opt-idx="${optIdx}">${escapeHtml(String(opt))}</button>
-                  `).join('')}
-                </div>
+            <div class="pb-mrow">
+              <span class="pb-mrow-label">${escapeHtml(label)}</span>
+              <div class="pedal-seg pb-mseg" role="group" aria-label="${escapeHtml(label)}">
+                ${ps.options.map((opt, optIdx) => `
+                  <button type="button" class="pedal-seg-btn${curIdx === optIdx ? ' is-active' : ''}"
+                    data-param-key="${escapeHtml(ps.key)}" data-opt-idx="${optIdx}">${escapeHtml(String(opt))}</button>
+                `).join('')}
               </div>
-            `;
-          }
-          return `
-            <div class="pedal-param-opt">
-              <label class="fader-label">${escapeHtml(ps.label || ps.key)}</label>
-              <select class="select pedal-select pb-param-select" data-param-key="${escapeHtml(ps.key)}">
-                ${ps.options.map((opt, optIdx) => `<option value="${optIdx}" ${curIdx === optIdx ? 'selected' : ''}>${escapeHtml(String(opt))}</option>`).join('')}
-              </select>
-            </div>
-          `;
-        }).join('')}
-      </div>
-    ` : '';
+            </div>`;
+        }
+        return `
+          <label class="pb-mrow">
+            <span class="pb-mrow-label">${escapeHtml(label)}</span>
+            <select class="select pedal-select pb-param-select" data-param-key="${escapeHtml(ps.key)}">
+              ${ps.options.map((opt, optIdx) => `<option value="${optIdx}" ${curIdx === optIdx ? 'selected' : ''}>${escapeHtml(String(opt))}</option>`).join('')}
+            </select>
+          </label>`;
+      }
+      const min = Number.isFinite(ps.min) ? ps.min : 0;
+      const max = Number.isFinite(ps.max) ? ps.max : 10;
+      const step = Number.isFinite(ps.step) && ps.step > 0 ? ps.step : 0.01;
+      const cur = Number.isFinite(node.params?.[ps.key]) ? node.params[ps.key] : (Number.isFinite(ps.def) ? ps.def : min);
+      return rangeRow({
+        cls: 'pb-param-slider',
+        dataAttrs: `data-param-key="${escapeHtml(ps.key)}" data-unit="${escapeHtml(ps.unit || '')}" data-min="${min}" data-max="${max}" data-step="${step}"`,
+        valAttr: `data-pb-param-val="${escapeHtml(ps.key)}"`,
+        label, min, max, step, value: cur, shown: formatBoardVal(ps, cur)
+      });
+    }).join('');
 
-    return `
-      <div class="pb-insp-head" style="--cat:${catColor};">
-        <button type="button" class="stomp pb-insp-stomp${isEnabled ? ' is-on' : ''}" id="pb-insp-toggle"
-          aria-label="Toggle ${escapeHtml(name)}" aria-pressed="${isEnabled ? 'true' : 'false'}"></button>
-        <span class="pb-insp-title">${escapeHtml(name)}</span>
-        <button type="button" class="btn btn-sm btn-ghost pb-insp-close" id="pb-insp-close" aria-label="Close inspector">×</button>
-      </div>
-      <div class="pb-insp-body">
+    return wrap(`
+      ${head(name, '<span class="pb-menu-swatch"></span>')}
+      <div class="pb-menu-body">
         ${fileRowHtml}
-        ${fadersHtml}
-        ${optionsHtml}
-        <div class="pb-insp-footer">
-          <button type="button" class="btn btn-sm pb-btn-danger" id="pb-insp-remove">Remove tile</button>
-        </div>
+        ${paramRows}
       </div>
-    `;
+      <div class="pb-menu-actions">
+        <button type="button" class="btn btn-sm${isEnabled ? '' : ' btn-primary'}" id="pb-menu-toggle" aria-pressed="${isEnabled ? 'false' : 'true'}">${isEnabled ? 'Bypass' : 'Turn on'}</button>
+        <button type="button" class="btn btn-sm pb-btn-danger" id="pb-menu-remove">Remove</button>
+      </div>`, name, `--cat:${catColor};`);
   }
 
   function bindEvents(preset, graph, nodes, cables, blockTypeMap) {
@@ -868,18 +832,55 @@ export function mount(container, ctx) {
     const cablesSvg = container.querySelector('#pb-cables-svg');
     const previewLayer = container.querySelector('#pb-preview-cable-layer');
 
+    const grid = container.querySelector('#pb-grid');
+    const zoomBtn = container.querySelector('#pb-zoom-reset');
+    let gridCell = 0;
+    // Pan/zoom only ever change transforms: the world and the dot grid are their own compositor layers,
+    // so moving the board doesn't repaint or re-lay-out anything.
     const applyTransform = () => {
       if (world) world.style.transform = `translate(${view.panX}px, ${view.panY}px) scale(${view.zoom})`;
-      if (viewport) {
-        viewport.style.backgroundSize = `${CELL_PX * view.zoom}px ${CELL_PX * view.zoom}px`;
-        viewport.style.backgroundPosition = `${view.panX}px ${view.panY}px`;
+      // Pixel-art canvases only stay crisp when shown near full size; zoomed out they'd alias into moire.
+      if (world) world.classList.toggle('pb-zoom-near', view.zoom >= 1.6);
+      if (grid) {
+        const cell = CELL_PX * view.zoom;
+        if (cell !== gridCell) {
+          gridCell = cell;
+          grid.style.backgroundSize = `${cell}px ${cell}px`;
+        }
+        const ox = (((view.panX % cell) + cell) % cell) - cell;
+        const oy = (((view.panY % cell) + cell) % cell) - cell;
+        grid.style.transform = `translate(${ox}px, ${oy}px)`;
       }
-      const zoomBtn = container.querySelector('#pb-zoom-reset');
       if (zoomBtn) zoomBtn.textContent = `${Math.round(view.zoom * 100)}%`;
     };
+    let transformRaf = 0;
+    const scheduleTransform = () => {
+      if (!transformRaf) transformRaf = requestAnimationFrame(() => { transformRaf = 0; applyTransform(); });
+    };
+    applyTransform();
 
-    // First time a preset is shown: zoom (never above 100%) and pan so every tile fits in the viewport.
-    if (view.fitPending && viewport) {
+    // While the board moves, the pedals' animations hold still (they resume ~180 ms after it stops).
+    const setMoving = (on) => {
+      if (!viewport || viewport.classList.contains('is-moving') === on) return;
+      viewport.classList.toggle('is-moving', on);
+      setPedalArtPaused(on);
+    };
+    const nudgeMoving = () => {
+      setMoving(true);
+      clearTimeout(movingTimer);
+      movingTimer = setTimeout(() => setMoving(false), 180);
+    };
+    setPedalArtPaused(false);
+    const closeMenuQuiet = () => {
+      if (!menu) return;
+      menu = null;
+      container.querySelector('#pb-menu')?.remove();
+    };
+
+    // Frame the board. 'all' fits every tile (never above 100%). The first view of a preset keeps pedals at a
+    // playable size instead (at least FIT_MIN_ZOOM): a long chain then starts at the input and scrolls sideways.
+    const fitView = (mode) => {
+      if (!viewport) return false;
       const rect = viewport.getBoundingClientRect();
       const io = getIoCoords(graph);
       const boxes = [
@@ -890,24 +891,27 @@ export function mount(container, ctx) {
           return { x: (Number(nd.x) || 0) * CELL_PX, y: (Number(nd.y) || 0) * CELL_PX, w: sz.w, h: sz.h };
         })
       ];
-      if (rect.width > 50 && rect.height > 50 && boxes.length) {
-        view.fitPending = false;
-        const minX = Math.min(...boxes.map((b) => b.x));
-        const minY = Math.min(...boxes.map((b) => b.y));
-        const maxX = Math.max(...boxes.map((b) => b.x + b.w));
-        const maxY = Math.max(...boxes.map((b) => b.y + b.h));
-        const pad = 40;
-        const zoom = clamp(Math.min(1, (rect.width - pad * 2) / (maxX - minX), (rect.height - pad * 2) / (maxY - minY)), ZOOM_MIN, ZOOM_MAX);
-        view.zoom = Math.round(zoom * 100) / 100;
-        view.panX = Math.round((rect.width - (maxX - minX) * view.zoom) / 2 - minX * view.zoom);
-        view.panY = Math.round(Math.min(pad, (rect.height - (maxY - minY) * view.zoom) / 2) - minY * view.zoom);
-        applyTransform();
-      }
-    }
+      if (!(rect.width > 50 && rect.height > 50)) return false;
+      const minX = Math.min(...boxes.map((b) => b.x));
+      const minY = Math.min(...boxes.map((b) => b.y));
+      const maxX = Math.max(...boxes.map((b) => b.x + b.w));
+      const maxY = Math.max(...boxes.map((b) => b.y + b.h));
+      const pad = 40;
+      const fitAll = Math.min(1, (rect.width - pad * 2) / (maxX - minX), (rect.height - pad * 2) / (maxY - minY));
+      const zoom = clamp(mode === 'all' ? fitAll : Math.max(fitAll, Math.min(1, FIT_MIN_ZOOM)), ZOOM_MIN, ZOOM_MAX);
+      view.zoom = Math.round(zoom * 100) / 100;
+      const w = (maxX - minX) * view.zoom;
+      const h = (maxY - minY) * view.zoom;
+      view.panX = Math.round((w <= rect.width - pad * 2 ? (rect.width - w) / 2 : pad) - minX * view.zoom);
+      view.panY = Math.round((h <= rect.height - pad * 2 ? (rect.height - h) / 2 : pad) - minY * view.zoom);
+      applyTransform();
+      return true;
+    };
+    if (view.fitPending && fitView('first')) view.fitPending = false;
 
     const zoomAtPoint = (clientX, clientY, nextZoom) => {
       if (!viewport) return;
-      const clamped = clamp(Math.round(nextZoom * 100) / 100, ZOOM_MIN, ZOOM_MAX);
+      const clamped = clamp(nextZoom, ZOOM_MIN, ZOOM_MAX);
       if (clamped === view.zoom) return;
       const rect = viewport.getBoundingClientRect();
       const px = clientX - rect.left;
@@ -917,7 +921,7 @@ export function mount(container, ctx) {
       view.panX = px - wx * clamped;
       view.panY = py - wy * clamped;
       view.zoom = clamped;
-      applyTransform();
+      scheduleTransform();
     };
 
     // Sidebar preset switching
@@ -980,7 +984,13 @@ export function mount(container, ctx) {
 
     // Toolbar actions
     container.querySelector('#pb-toggle-presets')?.addEventListener('click', () => {
-      drawerOpen = !drawerOpen;
+      if (window.matchMedia?.('(max-width: 999px)').matches) {
+        drawerOpen = !drawerOpen;
+      } else {
+        // Wide screens: hide the preset column so the board gets the whole width.
+        presetsHidden = !presetsHidden;
+        try { settings?.set?.('pedalboardPresetsHidden', presetsHidden); } catch (_) { /* optional */ }
+      }
       render();
     });
 
@@ -1091,6 +1101,7 @@ export function mount(container, ctx) {
       const r = viewport.getBoundingClientRect();
       zoomAtPoint(r.left + r.width / 2, r.top + r.height / 2, view.zoom + ZOOM_STEP);
     });
+    container.querySelector('#pb-zoom-fit')?.addEventListener('click', () => fitView('all'));
     container.querySelector('#pb-zoom-reset')?.addEventListener('click', () => {
       if (!viewport) return;
       const r = viewport.getBoundingClientRect();
@@ -1254,6 +1265,17 @@ export function mount(container, ctx) {
         selectedCable = { from: cable.from, to: cable.to, port: Number(cable.port) || 0 };
         selectedUid = null;
         paletteOpen = false;
+        menu = null;
+        render();
+      });
+
+      grp.querySelector('.pb-cable-hit')?.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        selectedCable = { from: cable.from, to: cable.to, port: Number(cable.port) || 0 };
+        selectedUid = null;
+        paletteOpen = false;
+        menu = { cable: selectedCable, x: e.clientX, y: e.clientY };
         render();
       });
 
@@ -1395,18 +1417,37 @@ export function mount(container, ctx) {
       });
     });
 
-    // Tile dragging & click-select
+    // Opens the tile menu next to a point (or next to the tile when opened from the keyboard).
+    const openTileMenu = (uid, clientX, clientY) => {
+      const tileEl = container.querySelector(`.pb-tile[data-uid="${CSS.escape(uid)}"]`);
+      if ((!clientX && !clientY) && tileEl) {
+        const r = tileEl.getBoundingClientRect();
+        clientX = r.right;
+        clientY = r.top;
+      }
+      selectedUid = uid;
+      selectedCable = null;
+      paletteOpen = false;
+      menu = { uid, x: clientX, y: clientY };
+      render();
+    };
+
+    // Tile dragging, click-select, right-click / long-press menu
     container.querySelectorAll('.pb-tile').forEach((tileEl) => {
       const uid = tileEl.dataset.uid;
 
       tileEl.addEventListener('keydown', (e) => {
+        if (e.target !== tileEl) return;
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault();
-          selectedUid = uid;
-          selectedCable = null;
-          paletteOpen = false;
-          render();
+          openTileMenu(uid, 0, 0);
         }
+      });
+
+      tileEl.addEventListener('contextmenu', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        openTileMenu(uid, e.clientX, e.clientY);
       });
 
       tileEl.addEventListener('pointerdown', (e) => {
@@ -1425,6 +1466,13 @@ export function mount(container, ctx) {
         let curY = origY;
         let moved = false;
         let rafId = 0;
+        // Holding still on a tile opens its menu (touch screens have no right-click).
+        let longPressTimer = setTimeout(() => {
+          longPressTimer = 0;
+          if (moved) return;
+          stop();
+          openTileMenu(uid, startX, startY);
+        }, LONG_PRESS_MS);
 
         // Pre-bind attached cable DOM elements for direct RAF updates without re-rendering
         const attachedCables = [];
@@ -1466,42 +1514,65 @@ export function mount(container, ctx) {
         };
 
         const onMove = (ev) => {
+          if (longPressTimer && Math.hypot(ev.clientX - startX, ev.clientY - startY) > 8) {
+            clearTimeout(longPressTimer);
+            longPressTimer = 0;
+          }
           const dxCells = Math.round((ev.clientX - startX) / (CELL_PX * view.zoom));
           const dyCells = Math.round((ev.clientY - startY) / (CELL_PX * view.zoom));
           const nextX = origX + dxCells;
           const nextY = origY + dyCells;
           if (nextX !== curX || nextY !== curY) {
             moved = true;
+            if (menu) closeMenuQuiet();
             curX = nextX;
             curY = nextY;
             if (!rafId) rafId = requestAnimationFrame(applyPos);
           }
         };
 
-        const onUp = () => {
+        const stop = () => {
+          clearTimeout(longPressTimer);
+          longPressTimer = 0;
           window.removeEventListener('pointermove', onMove);
           window.removeEventListener('pointerup', onUp);
+          window.removeEventListener('pointercancel', stop);
+        };
+
+        const onUp = () => {
+          stop();
           if (rafId) {
             cancelAnimationFrame(rafId);
             applyPos();
           }
           if (moved) {
             amp.moveNode(preset.id, uid, curX, curY);
-          } else {
+          } else if (selectedUid !== uid || menu) {
             selectedUid = uid;
             selectedCable = null;
             paletteOpen = false;
+            menu = null;
             render();
-            container.querySelector(`.pb-tile[data-uid="${CSS.escape(uid)}"]`)?.focus();
+            container.querySelector(`.pb-tile[data-uid="${CSS.escape(uid)}"]`)?.focus({ preventScroll: true });
           }
         };
 
         window.addEventListener('pointermove', onMove);
         window.addEventListener('pointerup', onUp);
+        window.addEventListener('pointercancel', stop);
       });
     });
 
-    // Viewport pan & wheel zoom
+    // Right-click on empty board: no browser menu, just close ours.
+    viewport?.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (menu) {
+        menu = null;
+        render();
+      }
+    });
+
+    // Pan: drag empty board (left button) or drag anywhere with the middle button.
     viewport?.addEventListener('pointerdown', (e) => {
       const isMiddle = e.button === 1;
       const isEmptyLeft = e.button === 0 && !e.target.closest('.pb-tile') && !e.target.closest('.pb-cable-group');
@@ -1513,37 +1584,38 @@ export function mount(container, ctx) {
       const origPanX = view.panX;
       const origPanY = view.panY;
       let panned = false;
-      let rafId = 0;
 
       viewport.classList.add('is-panning');
 
       const onMove = (ev) => {
         const dx = ev.clientX - startX;
         const dy = ev.clientY - startY;
-        if (!panned && Math.hypot(dx, dy) > 3) panned = true;
+        if (!panned && Math.hypot(dx, dy) > 3) {
+          panned = true;
+          closeMenuQuiet();
+          clearTimeout(movingTimer);
+          setMoving(true);
+        }
         if (panned) {
           view.panX = origPanX + dx;
           view.panY = origPanY + dy;
-          if (!rafId) {
-            rafId = requestAnimationFrame(() => {
-              rafId = 0;
-              applyTransform();
-            });
-          }
+          scheduleTransform();
         }
       };
 
       const onUp = () => {
         window.removeEventListener('pointermove', onMove);
         window.removeEventListener('pointerup', onUp);
-        if (rafId) cancelAnimationFrame(rafId);
+        window.removeEventListener('pointercancel', onUp);
         viewport.classList.remove('is-panning');
+        if (panned) nudgeMoving();
         if (!panned && isEmptyLeft) {
-          if (selectedUid || selectedCable || paletteOpen || confirmDeleteOpen) {
+          if (selectedUid || selectedCable || paletteOpen || confirmDeleteOpen || menu) {
             selectedUid = null;
             selectedCable = null;
             paletteOpen = false;
             confirmDeleteOpen = false;
+            menu = null;
             render();
           }
         }
@@ -1551,53 +1623,94 @@ export function mount(container, ctx) {
 
       window.addEventListener('pointermove', onMove);
       window.addEventListener('pointerup', onUp);
+      window.addEventListener('pointercancel', onUp);
     });
 
+    // Wheel anywhere over the board (pedals included; a focused knob takes plain wheel turns itself):
+    //   ctrl/cmd + wheel, trackpad pinch  -> zoom at the pointer
+    //   mouse wheel                        -> zoom at the pointer
+    //   trackpad two-finger scroll         -> pan (shift + mouse wheel pans too)
     viewport?.addEventListener('wheel', (e) => {
-      if (!(e.ctrlKey || e.metaKey)) return;
       e.preventDefault();
-      const factor = e.deltaY < 0 ? 1.1 : 1 / 1.1;
-      zoomAtPoint(e.clientX, e.clientY, view.zoom * factor);
+      const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? (viewport.clientHeight || 600) : 1;
+      const dx = e.deltaX * unit;
+      const dy = e.deltaY * unit;
+      if (!dx && !dy) return;
+      closeMenuQuiet();
+      nudgeMoving();
+      const zoomBy = (d) => zoomAtPoint(e.clientX, e.clientY, view.zoom * wheelZoomFactor(d));
+      if (e.ctrlKey || e.metaKey) {
+        zoomBy(dy);
+        viewport.dataset.wheel = 'pinch';
+        return;
+      }
+      const kind = classifyWheel(e, performance.now());
+      viewport.dataset.wheel = kind;
+      if (kind === 'trackpad' || e.shiftKey) {
+        view.panX -= e.shiftKey && !dx ? dy : dx;
+        view.panY -= e.shiftKey && !dx ? 0 : dy;
+        scheduleTransform();
+      } else {
+        zoomBy(dy);
+      }
     }, { passive: false });
 
-    // Inspector controls
-    container.querySelector('#pb-insp-close')?.addEventListener('click', () => {
-      selectedUid = null;
-      selectedCable = null;
+    // Tile menu: place it next to where it was opened, kept inside the page.
+    const menuEl = container.querySelector('#pb-menu');
+    const shellEl = container.querySelector('.pb-shell');
+    if (menuEl && shellEl && menu) {
+      const sr = shellEl.getBoundingClientRect();
+      const mw = menuEl.offsetWidth;
+      const mh = menuEl.offsetHeight;
+      let left = menu.x - sr.left + 10;
+      let top = menu.y - sr.top - 12;
+      if (left + mw > sr.width - 8) left = menu.x - sr.left - mw - 10;
+      left = clamp(left, 8, Math.max(8, sr.width - mw - 8));
+      top = clamp(top, 8, Math.max(8, sr.height - mh - 8));
+      menuEl.style.left = `${Math.round(left)}px`;
+      menuEl.style.top = `${Math.round(top)}px`;
+    }
+    const menuUid = menu?.uid || null;
+    const menuNode = menuUid ? nodes.find((n) => n.uid === menuUid) : null;
+    const artFor = (uid) => artCache.get(artKey(preset.id, uid));
+
+    container.querySelector('#pb-menu-close')?.addEventListener('click', () => {
+      menu = null;
       render();
     });
 
-    container.querySelector('#pb-insp-remove-cable')?.addEventListener('click', () => {
-      if (!selectedCable) return;
-      const c = selectedCable;
+    container.querySelector('#pb-menu-remove-cable')?.addEventListener('click', () => {
+      const c = menu?.cable;
+      if (!c) return;
+      menu = null;
       selectedCable = null;
       amp.removeCable(preset.id, c.from, c.to, c.port || 0);
       render();
     });
 
-    container.querySelector('#pb-insp-toggle')?.addEventListener('click', () => {
-      const node = nodes.find((n) => n.uid === selectedUid);
-      if (!node) return;
-      const nextOn = node.enabled === false;
-      node.enabled = nextOn;
-      amp.setBlockEnabled(preset.id, node.uid, nextOn);
+    container.querySelector('#pb-menu-toggle')?.addEventListener('click', () => {
+      if (!menuNode) return;
+      const nextOn = menuNode.enabled === false;
+      menuNode.enabled = nextOn;
+      amp.setBlockEnabled(preset.id, menuNode.uid, nextOn);
       render();
     });
 
-    container.querySelector('#pb-insp-browse')?.addEventListener('click', (e) => {
-      if (!selectedUid) return;
-      amp.browse(preset.id, e.currentTarget.dataset.kind, selectedUid);
+    container.querySelector('#pb-menu-browse')?.addEventListener('click', (e) => {
+      if (!menuNode) return;
+      amp.browse(preset.id, e.currentTarget.dataset.kind, menuNode.uid);
     });
 
-    container.querySelector('#pb-insp-clear')?.addEventListener('click', (e) => {
-      if (!selectedUid) return;
-      amp.clearFile(preset.id, e.currentTarget.dataset.kind, selectedUid);
+    container.querySelector('#pb-menu-clear')?.addEventListener('click', (e) => {
+      if (!menuNode) return;
+      amp.clearFile(preset.id, e.currentTarget.dataset.kind, menuNode.uid);
     });
 
-    container.querySelector('#pb-insp-remove')?.addEventListener('click', () => {
-      if (!selectedUid || selectedUid === 'in' || selectedUid === 'out') return;
-      const uid = selectedUid;
-      selectedUid = null;
+    container.querySelector('#pb-menu-remove')?.addEventListener('click', () => {
+      if (!menuNode) return;
+      const uid = menuNode.uid;
+      menu = null;
+      if (selectedUid === uid) selectedUid = null;
       amp.removeNode(preset.id, uid, true);
       render();
     });
@@ -1638,124 +1751,161 @@ export function mount(container, ctx) {
       });
     });
 
-    container.querySelectorAll('.pb-param-slider').forEach((slider) => {
-      const uid = selectedUid;
-      const node = nodes.find((n) => n.uid === uid);
-      if (!node) return;
-      const bt = blockTypeMap.get(node.type);
-      const key = slider.dataset.paramKey;
-      const spec = {
-        key,
-        unit: slider.dataset.unit || '',
-        min: parseFloat(slider.dataset.min),
-        max: parseFloat(slider.dataset.max),
-        step: parseFloat(slider.dataset.step)
-      };
-      const valEl = container.querySelector(`[data-pb-param-val="${CSS.escape(key)}"]`);
-      const tileSumEl = container.querySelector(`[data-tile-summary="${CSS.escape(uid)}"]`);
+    const refreshSummary = (node) => {
+      const tileSumEl = container.querySelector(`[data-tile-summary="${CSS.escape(node.uid)}"]`);
+      if (!tileSumEl) return;
+      const sum = getNodeSummary(node, blockTypeMap.get(node.type));
+      tileSumEl.textContent = sum;
+      tileSumEl.title = sum;
+    };
+    const setParamFromMenu = (node, key, v) => {
+      if (!node.params) node.params = {};
+      node.params[key] = v;
+      const entry = artFor(node.uid);
+      if (entry) {
+        entry.last[key] = v;
+        entry.ctl.set(key, v);
+      }
+      refreshSummary(node);
+    };
 
-      slider.addEventListener('input', () => {
-        const v = parseFloat(slider.value);
-        if (!node.params) node.params = {};
-        node.params[key] = v;
-        boardArt.get(uid)?.set(key, v);
-        if (valEl) valEl.textContent = formatBoardVal(spec, v);
-        if (tileSumEl) {
-          const sum = getNodeSummary(node, bt);
-          tileSumEl.textContent = sum;
-          tileSumEl.title = sum;
-        }
-        scheduleFaderSend(`param:${preset.id}:${uid}:${key}`, () => amp.setBlockParam(preset.id, uid, key, v));
+    if (menuNode) {
+      container.querySelectorAll('#pb-menu .pb-param-slider').forEach((slider) => {
+        const key = slider.dataset.paramKey;
+        const spec = {
+          key,
+          unit: slider.dataset.unit || '',
+          min: parseFloat(slider.dataset.min),
+          max: parseFloat(slider.dataset.max),
+          step: parseFloat(slider.dataset.step)
+        };
+        const valEl = container.querySelector(`#pb-menu [data-pb-param-val="${CSS.escape(key)}"]`);
+        slider.addEventListener('input', () => {
+          const v = parseFloat(slider.value);
+          setParamFromMenu(menuNode, key, v);
+          if (valEl) valEl.textContent = formatBoardVal(spec, v);
+          scheduleFaderSend(`param:${preset.id}:${menuNode.uid}:${key}`, () => amp.setBlockParam(preset.id, menuNode.uid, key, v));
+        });
       });
-    });
 
-    container.querySelectorAll('.pb-inspector .pedal-seg-btn').forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const node = nodes.find((n) => n.uid === selectedUid);
-        if (!node) return;
-        const bt = blockTypeMap.get(node.type);
-        const key = btn.dataset.paramKey;
-        const val = Number(btn.dataset.optIdx);
-        if (!node.params) node.params = {};
-        node.params[key] = val;
-        btn.closest('.pedal-seg')?.querySelectorAll('.pedal-seg-btn').forEach((b) => b.classList.remove('is-active'));
-        btn.classList.add('is-active');
-        const tileSumEl = container.querySelector(`[data-tile-summary="${CSS.escape(node.uid)}"]`);
-        if (tileSumEl) {
-          const sum = getNodeSummary(node, bt);
-          tileSumEl.textContent = sum;
-          tileSumEl.title = sum;
-        }
-        amp.setBlockParam(preset.id, node.uid, key, val);
+      container.querySelectorAll('#pb-menu .pedal-seg-btn').forEach((btn) => {
+        btn.addEventListener('click', () => {
+          const key = btn.dataset.paramKey;
+          const val = Number(btn.dataset.optIdx);
+          setParamFromMenu(menuNode, key, val);
+          btn.closest('.pedal-seg')?.querySelectorAll('.pedal-seg-btn').forEach((b) => b.classList.remove('is-active'));
+          btn.classList.add('is-active');
+          amp.setBlockParam(preset.id, menuNode.uid, key, val);
+        });
       });
-    });
 
-    container.querySelectorAll('.pb-param-select').forEach((sel) => {
-      sel.addEventListener('change', () => {
-        const node = nodes.find((n) => n.uid === selectedUid);
-        if (!node) return;
-        const bt = blockTypeMap.get(node.type);
-        const key = sel.dataset.paramKey;
-        const val = Number(sel.value);
-        if (!node.params) node.params = {};
-        node.params[key] = val;
-        const tileSumEl = container.querySelector(`[data-tile-summary="${CSS.escape(node.uid)}"]`);
-        if (tileSumEl) {
-          const sum = getNodeSummary(node, bt);
-          tileSumEl.textContent = sum;
-          tileSumEl.title = sum;
-        }
-        amp.setBlockParam(preset.id, node.uid, key, val);
+      container.querySelectorAll('#pb-menu .pb-param-select').forEach((sel) => {
+        sel.addEventListener('change', () => {
+          const key = sel.dataset.paramKey;
+          const val = Number(sel.value);
+          setParamFromMenu(menuNode, key, val);
+          amp.setBlockParam(preset.id, menuNode.uid, key, val);
+        });
       });
-    });
+    }
 
-    boardArt.forEach((ctl) => ctl?.destroy?.());
-    boardArt.clear();
+    // Pedal art: reuse what's already mounted (same preset, tile and type), mount the rest, drop the leftovers.
+    const seenArt = new Set();
     container.querySelectorAll('.pb-tile.is-pedal').forEach((tileEl) => {
       const uid = tileEl.dataset.uid;
       const node = nodes.find((n) => n.uid === uid);
-      const root = tileEl.querySelector('.pa');
-      if (!node || !root) return;
+      const slot = tileEl.querySelector('.pb-pedal-art');
+      if (!node || !slot) return;
+      const key = artKey(preset.id, uid);
+      seenArt.add(key);
       const bt = blockTypeMap.get(node.type);
-      boardArt.set(uid, mountPedalArt(root, {
+      const specs = bt?.params || [];
+      let entry = artCache.get(key);
+      if (entry && entry.type !== node.type) {
+        entry.ctl.destroy();
+        artCache.delete(key);
+        entry = null;
+      }
+      if (entry) {
+        slot.replaceWith(entry.el);
+        entry.node = node;
+        entry.ctl.setEnabled(node.enabled !== false);
+        for (const ps of specs) {
+          const v = node.params?.[ps.key];
+          if (Number.isFinite(v) && v !== entry.last[ps.key]) {
+            entry.last[ps.key] = v;
+            entry.ctl.set(ps.key, v);
+          }
+        }
+        return;
+      }
+      slot.innerHTML = pedalArtHtml(node.type);
+      const root = slot.querySelector('.pa');
+      if (!root) return;
+      const created = { type: node.type, el: slot, node, last: { ...(node.params || {}) }, ctl: null };
+      created.ctl = mountPedalArt(root, {
         type: node.type,
-        specs: bt?.params || [],
+        specs,
         params: node.params || {},
         enabled: node.enabled !== false,
-        onParam(key, value) {
-          if (!node.params) node.params = {};
-          node.params[key] = value;
-          if (selectedUid === uid) {
-            const slider = container.querySelector(`.pb-param-slider[data-param-key="${CSS.escape(key)}"]`);
+        scale: tileSizeFor(node).k,
+        onParam(pkey, value) {
+          const cur = created.node;
+          if (!cur.params) cur.params = {};
+          cur.params[pkey] = value;
+          created.last[pkey] = value;
+          if (menu?.uid === cur.uid) {
+            const slider = container.querySelector(`#pb-menu .pb-param-slider[data-param-key="${CSS.escape(pkey)}"]`);
             if (slider) {
               slider.value = String(value);
-              const valEl = container.querySelector(`[data-pb-param-val="${CSS.escape(key)}"]`);
-              const spec = bt?.params?.find((p) => p.key === key);
+              const valEl = container.querySelector(`#pb-menu [data-pb-param-val="${CSS.escape(pkey)}"]`);
+              const spec = blockTypeMap.get(cur.type)?.params?.find((p) => p.key === pkey);
               if (valEl && spec) valEl.textContent = formatBoardVal(spec, value);
             }
           }
-          scheduleFaderSend(`param:${preset.id}:${uid}:${key}`, () => amp.setBlockParam(preset.id, uid, key, value));
+          scheduleFaderSend(`param:${preset.id}:${cur.uid}:${pkey}`, () => amp.setBlockParam(preset.id, cur.uid, pkey, value));
         },
         onToggle() {
-          const nextOn = node.enabled === false;
-          node.enabled = nextOn;
-          amp.setBlockEnabled(preset.id, uid, nextOn);
+          const cur = created.node;
+          const nextOn = cur.enabled === false;
+          cur.enabled = nextOn;
+          amp.setBlockEnabled(preset.id, cur.uid, nextOn);
           render();
         }
-      }));
+      });
+      artCache.set(key, created);
     });
+    for (const [key, entry] of artCache) {
+      if (!seenArt.has(key)) {
+        entry.ctl.destroy();
+        artCache.delete(key);
+      }
+    }
   }
 
   // Document-level click to close popovers
   const onDocClick = (e) => {
+    let changed = false;
     if (paletteOpen && !e.target.closest('.pb-palette-wrap')) {
       paletteOpen = false;
-      render();
+      changed = true;
     }
+    // Clicks on the board are handled by the board itself; anywhere else outside the menu closes it.
+    if (menu && e.target.isConnected && !e.target.closest('.pb-menu') && !e.target.closest('.pb-viewport')) {
+      menu = null;
+      changed = true;
+    }
+    if (changed) render();
   };
 
   // Global keyboard shortcuts (ignored while typing in form controls)
   const onKeyDown = (e) => {
+    if (e.key === 'Escape' && menu) {
+      menu = null;
+      render();
+      return;
+    }
+    if (e.defaultPrevented) return;   // a focused pedal knob already used the key
     if (e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
     if (amp.state !== 'online') return;
     const presetList = getPresetList();
@@ -1866,6 +2016,10 @@ export function mount(container, ctx) {
         cancelAnimationFrame(entry.id);
       }
       faderRafs.clear();
+      clearTimeout(movingTimer);
+      setPedalArtPaused(false);
+      for (const entry of artCache.values()) entry.ctl.destroy();
+      artCache.clear();
     }
   };
 }

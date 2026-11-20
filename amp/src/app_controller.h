@@ -69,6 +69,8 @@ public:
     void enqueueToggleBypass();
     void enqueueToggleMute();
     void enqueueOpenAsioPanel();
+    // force=false (Windows reported a device change): only when no stream is running. force=true: stop and rescan.
+    void enqueueRescanDevices(bool force);
     void enqueueSetStartWithWindows(bool enabled);
 
     TrayStateSnapshot getTraySnapshot() const;
@@ -88,7 +90,8 @@ private:
         ToggleMute,
         OpenAsioPanel,
         SetStartWithWindows,
-        BrowseCompleted
+        BrowseCompleted,
+        RescanDevices
     };
 
     struct Command {

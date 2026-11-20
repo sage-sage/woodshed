@@ -80,6 +80,47 @@ class SampleSet {
   }
 }
 
+/**
+ * The pitch path of one note from its technique fields (see song.js techniqueFields), as automation points
+ * [seconds from the note's start, semitones off its written pitch], or [] for a straight note.
+ * `fromSemis` is where a legato slide ('slide' tech) starts, relative to this note (prev midi - this midi).
+ */
+export function pitchCurve(note, durSec, fromSemis = null) {
+  const dur = Math.max(0.02, Number(durSec) || 0);
+  const pts = [];
+  const bend = Number(note?.bend) || 0;
+  if (bend > 0) {
+    let curve = Array.isArray(note.bendCurve) && note.bendCurve.length >= 2 ? note.bendCurve : null;
+    if (!curve) {
+      if (note.prebend) curve = note.release ? [[0, bend], [0.4, bend], [0.8, 0]] : [[0, bend], [1, bend]];
+      else curve = note.release ? [[0, 0], [0.25, bend], [0.6, bend], [0.9, 0]] : [[0, 0], [0.3, bend], [1, bend]];
+    }
+    for (const [pos, semis] of curve) pts.push([Math.max(0, Math.min(1, Number(pos) || 0)) * dur, Number(semis) || 0]);
+  }
+  // Slides: a quick glide into the note (from a neighbouring fret, or the previous note) or off it.
+  const glideIn = Math.min(0.08, dur * 0.3);
+  let startSemis = null;
+  if (note?.tech === 'slide' && Number.isFinite(fromSemis) && fromSemis !== 0) startSemis = Math.max(-12, Math.min(12, fromSemis));
+  else if (note?.slideIn === 'below') startSemis = -3;
+  else if (note?.slideIn === 'above') startSemis = 3;
+  if (startSemis !== null && pts.length === 0) {
+    pts.push([0, startSemis], [glideIn, 0]);
+  }
+  if (note?.slideOut === 'up' || note?.slideOut === 'down') {
+    const glideOut = Math.min(0.15, dur * 0.4);
+    const endSemis = note.slideOut === 'up' ? 5 : -5;
+    const held = pts.length ? pts[pts.length - 1][1] : 0;
+    if (pts.length === 0) pts.push([0, 0]);
+    pts.push([dur - glideOut, held], [dur, held + endSemis]);
+  }
+  pts.sort((a, b) => a[0] - b[0]);
+  return pts;
+}
+
+function hasTechnique(n) {
+  return Boolean(n && ((Number(n.bend) || 0) > 0 || n.slideIn || n.slideOut || n.vibrato || n.tech === 'vib' || n.tech === 'slide'));
+}
+
 export function resolveGuideTone(setting, songToneId) {
   if (!setting || setting === 'match') {
     return songToneId && TONE_PRESETS[songToneId] ? songToneId : 'clean';
@@ -243,7 +284,8 @@ export class GuitarSynth {
   }
 
   setVolume(vol) {
-    const v = Math.max(0, Math.min(1.5, Number(vol) ?? 0.7));
+    const n = Number(vol);
+    const v = Math.max(0, Math.min(1.5, Number.isFinite(n) ? n : 0.7));
     this.output.gain.setTargetAtTime(v, this.ctx.currentTime, 0.01);
   }
 
@@ -414,7 +456,11 @@ export class GuitarSynth {
     }
   }
 
-  playNote(midi, when = 0, dur = 0.4, gain = 0.8, string = -1) {
+  /**
+   * `tech` (optional): { note, fromSemis } — the song note carrying bend/slide/vibrato fields, and for a
+   * legato slide where it comes from (previous midi - midi). Bends and slides move the voice's detune.
+   */
+  playNote(midi, when = 0, dur = 0.4, gain = 0.8, string = -1, tech = null) {
     const now = this.ctx.currentTime;
     const shift = this.isAmpRouted ? this.routeLatency : 0;
     const startTime = Math.max(now, (Number(when) || now) - shift);
@@ -453,6 +499,28 @@ export class GuitarSynth {
     src.connect(env);
     env.connect(this.output);
 
+    let lfo = null;
+    if (tech?.note) {
+      const curve = pitchCurve(tech.note, noteDur, tech.fromSemis);
+      if (curve.length && src.detune) {
+        src.detune.setValueAtTime(curve[0][1] * 100, startTime);
+        for (let i = 1; i < curve.length; i++) {
+          src.detune.linearRampToValueAtTime(curve[i][1] * 100, startTime + curve[i][0]);
+        }
+      }
+      if ((tech.note.vibrato || tech.note.tech === 'vib') && src.detune) {
+        lfo = this.ctx.createOscillator();
+        lfo.frequency.value = 5.5;
+        const depth = this.ctx.createGain();
+        depth.gain.setValueAtTime(0, startTime);
+        depth.gain.linearRampToValueAtTime(30, startTime + Math.min(0.25, noteDur * 0.5)); // cents, eases in
+        lfo.connect(depth);
+        depth.connect(src.detune);
+        lfo.start(startTime);
+        lfo.stop(startTime + noteDur + releaseSec + 0.005);
+      }
+    }
+
     const voice = { src, env, startTime, string, damped: false };
     this.activeVoices.add(voice);
     src.onended = () => {
@@ -460,6 +528,7 @@ export class GuitarSynth {
       try {
         src.disconnect();
         env.disconnect();
+        if (lfo) lfo.disconnect();
       } catch (_) {
         // Ignore
       }
@@ -470,9 +539,14 @@ export class GuitarSynth {
     return voice;
   }
 
+  /**
+   * A metronome click, heard at `when`. Routed through Woodshed Amp it goes to the amp with the guide (and is
+   * sent early by the route's delay, like the guide's notes), so nothing is left on the computer's own output.
+   */
   playClick(when = 0, accented = false, gain = 0.45) {
     const now = this.ctx.currentTime;
-    const startTime = Math.max(now, Number(when) || now);
+    const shift = this.isAmpRouted ? this.routeLatency : 0;
+    const startTime = Math.max(now, (Number(when) || now) - shift);
     const osc = this.ctx.createOscillator();
     const env = this.ctx.createGain();
 
@@ -486,7 +560,7 @@ export class GuitarSynth {
     env.gain.exponentialRampToValueAtTime(0.0001, startTime + 0.04);
 
     osc.connect(env);
-    env.connect(getMasterGain());
+    env.connect(this._ampCapture || getMasterGain());
 
     const voice = { src: osc, env };
     this.activeVoices.add(voice);
@@ -547,6 +621,7 @@ export class GuideScheduler {
     this._lastTabTime = -Infinity;
     this._scheduledEvents = new Set();
     this._scheduledBeats = new Set();
+    this._lastMidiByString = new Map(); // for legato slides: where the string's previous note was
   }
 
   _buildBeats(song) {
@@ -582,6 +657,7 @@ export class GuideScheduler {
   reset() {
     this._scheduledEvents.clear();
     this._scheduledBeats.clear();
+    this._lastMidiByString.clear();
     this._lastTabTime = -Infinity;
     if (this.synth) this.synth.stopAll();
   }
@@ -611,13 +687,15 @@ export class GuideScheduler {
     const effectiveRate = Math.max(0.25, Number(rate) || 1.0);
     const beatSec = ((60 / bpm) * (4 / den)) / effectiveRate;
 
-    const now = this.synth.ctx.currentTime + 0.03;
+    // Through the amp the clicks are heard the route's delay later; start the song that much later too.
+    const routeLat = this.synth.isAmpRouted ? (Number(this.synth.routeLatency) || 0) : 0;
+    const now = this.synth.ctx.currentTime + 0.03 + routeLat;
     for (let i = 0; i < num; i++) {
       this.synth.playClick(now + i * beatSec, i === 0, 0.55);
     }
 
     await new Promise((resolve) => {
-      setTimeout(resolve, Math.round(num * beatSec * 1000));
+      setTimeout(resolve, Math.round((num * beatSec + routeLat) * 1000));
     });
   }
 
@@ -652,7 +730,10 @@ export class GuideScheduler {
 
         this.synth.damp(when, ev.notes.length >= 2 ? null : ev.notes.map((n) => n.string));
         for (const n of ev.notes) {
-          this.synth.playNote(n.midi, when, Math.max(0.08, n.dur / rate), perNoteGain, n.string);
+          const prev = this._lastMidiByString.get(n.string);
+          const tech = hasTechnique(n) ? { note: n, fromSemis: Number.isFinite(prev) ? prev - n.midi : null } : null;
+          this.synth.playNote(n.midi, when, Math.max(0.08, n.dur / rate), perNoteGain, n.string, tech);
+          this._lastMidiByString.set(n.string, n.midi);
         }
       }
     }

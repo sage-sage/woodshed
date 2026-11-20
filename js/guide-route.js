@@ -35,8 +35,10 @@ function computeLatencySec(amp) {
 }
 
 export function startGuideRouting(ctx) {
-  const { amp, synth, settings } = ctx || {};
+  const { amp, synth, settings, input } = ctx || {};
   const audioCtx = synth?.ctx;
+  // Read by the glitch readout (amp-diag.js): what the page itself is doing with audio.
+  const diag = { routed: false, systemOutput: 'on', ctxRecoveries: 0, packetsSent: 0 };
 
   let stopped = false;
   let active = false;
@@ -59,8 +61,15 @@ export function startGuideRouting(ctx) {
       audioCtx &&
       settings?.get('guideThroughAmp') !== false &&
       amp.state === 'online' &&
-      amp.supportsGuide
+      amp.supportsGuide &&
+      // An amp whose interface isn't open would swallow the guide: keep it on the computer's output then.
+      amp.status?.running !== false
     );
+  }
+
+  // The page still needs the computer's output when it monitors a browser input itself.
+  function pageNeedsOutput() {
+    return Boolean(input && input.sourceKind !== 'amp' && input.monitorOn);
   }
 
   function flushPackets() {
@@ -90,7 +99,7 @@ export function startGuideRouting(ctx) {
       stagedCount = remaining;
 
       if (active && amp.state === 'online' && amp.supportsGuide) {
-        amp.sendBinary(packet);
+        if (amp.sendBinary(packet)) diag.packetsSent++;
       }
     }
   }
@@ -164,10 +173,43 @@ export function startGuideRouting(ctx) {
     return workletPromise;
   }
 
+  // While the amp plays the guide (and the clicks), the page has nothing left to play on the computer's own
+  // output, so it lets go of it: an idle Windows (WASAPI) stream on the same interface ASIO is driving, at a
+  // different sample rate, is a known source of static on some drivers, and a device hiccup there can stall
+  // this AudioContext's clock (and with it the guide). Chrome 110+ can run a context with no output at all.
+  const canDropOutput = typeof audioCtx?.setSinkId === 'function';
+  let wantSink = null; // 'none' | '' (default device)
+  function setSystemOutput(on) {
+    const target = on ? '' : 'none';
+    if (!canDropOutput || wantSink === target) return;
+    wantSink = target;
+    audioCtx.setSinkId(on ? '' : { type: 'none' }).then(() => {
+      diag.systemOutput = on ? 'on' : 'off';
+    }).catch((err) => {
+      diag.systemOutput = `error: ${err?.message || err}`;
+    });
+  }
+
+  // Nothing in Woodshed suspends the AudioContext on purpose, so if it stops (a device error, the system
+  // taking the output away) bring it straight back; otherwise the guide stays silent until the next Play.
+  let everRan = false;
+  const onCtxState = () => {
+    if (audioCtx.state === 'running') {
+      everRan = true;
+      return;
+    }
+    if (!everRan || stopped || audioCtx.state === 'closed') return;
+    diag.ctxRecoveries++;
+    audioCtx.resume().catch(() => {});
+  };
+  audioCtx?.addEventListener?.('statechange', onCtxState);
+
   function disengage(notifyAmp = true) {
     if (!active) return;
     active = false;
     stagedCount = 0;
+    diag.routed = false;
+    setSystemOutput(true);
     if (workletNode) {
       try {
         workletNode.port.postMessage({ type: 'active', active: false });
@@ -188,6 +230,7 @@ export function startGuideRouting(ctx) {
     }
 
     if (active && workletNode) {
+      setSystemOutput(pageNeedsOutput());
       const nextLatency = computeLatencySec(amp);
       if (Math.abs(nextLatency - currentLatencySec) > 1e-6) {
         currentLatencySec = nextLatency;
@@ -210,6 +253,8 @@ export function startGuideRouting(ctx) {
     node.port.postMessage({ type: 'active', active: true });
     synth.setAmpRoute({ capture: node, latencySec: currentLatencySec });
     amp.startGuide(sampleRate);
+    diag.routed = true;
+    setSystemOutput(pageNeedsOutput());
   }
 
   const onReevaluate = () => {
@@ -226,9 +271,11 @@ export function startGuideRouting(ctx) {
   evaluate();
 
   return {
+    diag,
     stop() {
       if (stopped) return;
       stopped = true;
+      audioCtx?.removeEventListener?.('statechange', onCtxState);
       amp?.removeEventListener('state', onReevaluate);
       amp?.removeEventListener('status', onReevaluate);
       amp?.removeEventListener('hello', onReevaluate);

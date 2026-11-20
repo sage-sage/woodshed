@@ -12,11 +12,11 @@
   min-height: 0;
   width: 100%;
   display: grid;
-  grid-template-columns: 260px minmax(0, 1fr) 300px;
+  grid-template-columns: 240px minmax(0, 1fr);
   grid-template-rows: auto minmax(0, 1fr);
   grid-template-areas:
-    "presets toolbar toolbar"
-    "presets board   inspector";
+    "presets toolbar"
+    "presets board";
   overflow: hidden;
   background: var(--bg);
   color: var(--fg);
@@ -178,7 +178,18 @@
 }
 
 .pb-presets-toggle {
-  display: none;
+  display: inline-flex;
+}
+
+/* Wide screens: the preset column can be hidden so the board takes the whole width. */
+@media (min-width: 1000px) {
+  .pb-shell.is-presets-hidden {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "toolbar"
+      "board";
+  }
+  .pb-shell.is-presets-hidden .pb-presets { display: none; }
 }
 
 .pb-preset-title {
@@ -329,8 +340,8 @@
   position: fixed;
   top: 0;
   left: 0;
-  width: 140px;
-  height: 80px;
+  width: 180px;
+  height: 96px;
   border-radius: 10px;
   background: var(--panel);
   border: 1px solid var(--accent);
@@ -356,11 +367,37 @@
   height: 100%;
   overflow: hidden;
   background-color: #14110e;
-  background-image: radial-gradient(circle, rgba(236, 231, 223, 0.14) 1px, transparent 1px);
-  background-size: 20px 20px;
   cursor: grab;
   touch-action: none;
   user-select: none;
+  overscroll-behavior: contain;
+}
+
+/* Dot grid: its own layer, moved by transform (by less than one cell) when the board pans. */
+.pb-grid {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(100% + 120px);
+  height: calc(100% + 120px);
+  background-image: radial-gradient(circle, rgba(236, 231, 223, 0.14) 1.5px, transparent 1.5px);
+  background-size: 54px 54px;
+  pointer-events: none;
+  will-change: transform;
+}
+
+.pb-hint {
+  position: absolute;
+  left: 12px;
+  bottom: 10px;
+  max-width: calc(100% - 24px);
+  font-size: 11.5px;
+  color: var(--fg-faint, rgba(236, 231, 223, 0.45));
+  pointer-events: none;
+  z-index: 4;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .pb-viewport.is-panning {
@@ -372,7 +409,13 @@
   left: 0;
   top: 0;
   transform-origin: 0 0;
+  will-change: transform;   /* pan/zoom only move this layer; nothing inside repaints */
 }
+
+/* While the board is panned or zoomed, the pedals' animations hold still. */
+.pb-viewport.is-moving .pa * { animation-play-state: paused !important; }
+.pb-viewport.is-moving .pb-cable-group,
+.pb-viewport.is-moving .pb-tile { pointer-events: none; }
 
 .pb-cables-svg {
   position: absolute;
@@ -469,11 +512,11 @@
   fill: var(--accent-ink);
 }
 
-/* ---- Tiles (140x80 px) ---- */
+/* ---- Tiles (180x96 px) ---- */
 .pb-tile {
   position: absolute;
-  width: 140px;
-  height: 80px;
+  width: 180px;
+  height: 96px;
   box-sizing: border-box;
   border-radius: 10px;
   background: var(--panel);
@@ -498,8 +541,8 @@
 }
 
 .pb-tile.is-pedal { padding: 0; background: none; border: 0; border-radius: 0; box-shadow: 0 8px 18px rgba(0,0,0,.55); }
-.pb-tile.is-pedal .pb-pedal-art { width: 100%; height: 100%; overflow: hidden; }
-.pb-tile.is-pedal.is-selected { outline: 2px solid var(--accent); outline-offset: 4px; }
+.pb-tile.is-pedal .pb-pedal-art { width: 100%; height: 100%; overflow: hidden; content-visibility: auto; contain-intrinsic-size: auto 100px; }
+.pb-tile.is-pedal.is-selected { outline: 3px solid var(--accent); outline-offset: 5px; }
 .pb-tile.is-pedal.is-off .pb-pedal-art { filter: saturate(.45) brightness(.7); }
 .pb-tile.is-pedal.is-disconnected .pb-pedal-art { opacity: .55; }
 
@@ -537,7 +580,7 @@
 
 .pb-tile.is-io .pb-tile-title {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
   letter-spacing: 0.1em;
   color: var(--fg-muted);
@@ -553,7 +596,7 @@
 }
 
 .pb-tile-summary {
-  font-size: 11px;
+  font-size: 13px;
   color: var(--fg-muted);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -563,8 +606,8 @@
 /* ---- Jacks (14px circles on left/right edge) ---- */
 .pb-jack {
   position: absolute;
-  width: 14px;
-  height: 14px;
+  width: 18px;
+  height: 18px;
   border-radius: 50%;
   background: #14110e;
   border: 2px solid var(--nickel);
@@ -575,23 +618,23 @@
 }
 
 .pb-jack.is-out {
-  right: -7px;
+  right: -9px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 .pb-jack.is-in {
-  left: -7px;
+  left: -9px;
   top: 50%;
   transform: translateY(-50%);
 }
 
 .pb-jack.is-in.is-port-a {
-  top: 24px;
+  top: 35%;
 }
 
 .pb-jack.is-in.is-port-b {
-  top: 56px;
+  top: 65%;
 }
 
 .pb-jack:hover {
@@ -613,7 +656,7 @@
 
 .pb-jack-lbl {
   position: absolute;
-  left: 14px;
+  left: 18px;
   top: 50%;
   transform: translateY(-50%);
   font-size: 9.5px;
@@ -623,85 +666,125 @@
   pointer-events: none;
 }
 
-/* ---- Right Inspector Panel ---- */
-.pb-inspector {
-  grid-area: inspector;
+/* ---- Tile menu (right-click / long-press) ---- */
+.pb-menu {
+  position: absolute;
+  z-index: 50;
+  width: 280px;
+  max-height: calc(100% - 16px);
   display: flex;
   flex-direction: column;
-  min-height: 0;
-  background: var(--panel);
-  border-left: 1px solid var(--line);
-  z-index: 20;
+  background: var(--panel-2);
+  border: 1px solid var(--line-strong);
+  border-top: 3px solid var(--cat, var(--accent));
+  border-radius: 10px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7);
+  color: var(--fg);
 }
 
-.pb-insp-head {
+.pb-menu-head {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 11px 14px;
+  padding: 8px 8px 6px 12px;
   border-bottom: 1px solid var(--line);
 }
 
-.pb-insp-title {
+.pb-menu-swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  background: var(--cat, var(--accent));
+  flex: 0 0 auto;
+}
+
+.pb-menu-title {
   font-size: 13.5px;
   font-weight: 600;
-  color: var(--fg);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+
+.pb-menu-close {
+  margin-left: auto;
+  padding: 2px 8px;
+  font-size: 16px;
+  line-height: 1;
+}
+
+.pb-menu-body {
+  overflow-y: auto;
+  padding: 8px 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pb-mrow {
+  display: grid;
+  grid-template-columns: 64px minmax(0, 1fr) 64px;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+}
+
+.pb-mrow-label {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--fg-muted);
+  font-family: var(--font-mono);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.pb-insp-close {
-  display: none;
-  margin-left: auto;
-  padding: 2px 7px;
-  font-size: 16px;
-  line-height: 1;
+.pb-mrow-val {
+  font-size: 12px;
+  color: var(--accent);
+  font-weight: 600;
+  text-align: right;
+  white-space: nowrap;
 }
 
-.pb-insp-body {
-  flex: 1 1 auto;
-  overflow-y: auto;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 14px;
+.pb-mrow .pb-mseg,
+.pb-mrow .pb-param-select {
+  grid-column: 2 / 4;
+  min-width: 0;
 }
 
-.pb-insp-help {
+.pb-menu input.pb-mrange {
+  width: 100%;
+  height: 22px;
   margin: 0;
-  font-size: 12.5px;
-  line-height: 1.55;
-  color: var(--fg-muted);
+  border: 0;
+  background: linear-gradient(#0b0908, #0b0908) center / 100% 6px no-repeat;
+  cursor: pointer;
 }
 
-.pb-insp-cable-route {
-  margin: 0;
+.pb-menu input.pb-mrange::-webkit-slider-runnable-track { background: transparent; }
+
+.pb-menu-route {
+  margin: 2px 0;
   font-size: 13px;
-  color: var(--fg);
 }
 
-.pb-insp-file {
+.pb-menu-file {
   display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 10px;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
   border-radius: 8px;
   background: rgba(0, 0, 0, 0.24);
   border: 1px solid var(--line);
 }
 
-.pb-insp-file-top {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 6px;
-}
-
-.pb-insp-file-name {
+.pb-menu-file-name {
+  flex: 1 1 auto;
+  min-width: 0;
   font-size: 12.5px;
-  font-weight: 500;
-  color: var(--fg);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -714,25 +797,11 @@
   font-size: 10.5px;
 }
 
-.pb-insp-file-btns {
+.pb-menu-actions {
   display: flex;
-  gap: 6px;
-}
-
-.pb-inspector .pedal-faders {
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 10px 8px;
-}
-
-.pb-inspector .fader-slot,
-.pb-inspector input.fader-input {
-  height: 124px;
-}
-
-.pb-insp-footer {
-  margin-top: auto;
-  padding-top: 8px;
+  gap: 8px;
+  justify-content: space-between;
+  padding: 8px 12px 10px;
   border-top: 1px solid var(--line);
 }
 
@@ -766,23 +835,12 @@
     transform: translateX(0);
   }
 
-  .pb-inspector {
-    position: absolute;
-    top: 45px;
-    bottom: 0;
-    right: 0;
-    width: min(300px, 92vw);
-    transform: translateX(100%);
-    transition: transform 0.18s ease;
-    box-shadow: -10px 0 28px rgba(0, 0, 0, 0.65);
-    z-index: 35;
-  }
-
-  .pb-shell.has-selection .pb-inspector {
-    transform: translateX(0);
-  }
-
-  .pb-insp-close {
-    display: inline-flex;
+  .pb-menu {
+    width: min(280px, calc(100% - 16px));
   }
 }
+
+/* Zoomed out, pedal art is drawn well below its design size: nearest-neighbour scaling of the dithered canvases
+   (Starlight Prairie, Dynamite) and the fine grain overlay alias into moire, so scale them smoothly and drop the grain. */
+.pb-world:not(.pb-zoom-near) .pa canvas { image-rendering: auto !important; }
+.pb-world:not(.pb-zoom-near) .pa .a-grain { display: none; }

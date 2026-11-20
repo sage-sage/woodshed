@@ -24,6 +24,60 @@ export function midiToName(midi, useFlats = false) {
   return `${table[pc]}${oct}`;
 }
 
+/*
+ * Optional technique fields a note may carry (besides `tech`, which is one of '', 'h', 'p', 'slide',
+ * 'bend', 'vib', 'pm', 'harm'; 'h'/'p'/'slide' sit on the DESTINATION note and connect from the previous
+ * note on the same string):
+ *   bend      peak bend in semitones (2 = full, 1 = half, 3 = one and a half)
+ *   bendCurve [[pos 0..1, semitones], ...] shape over the note, when known
+ *   prebend   true: the string is bent before the pick (curve starts at the peak)
+ *   release   true: the bend comes back down during the note
+ *   slideIn   'below' | 'above': slide into the note from nowhere
+ *   slideOut  'up' | 'down': slide off the note to nowhere
+ *   vibrato   true (also when `tech` is taken by something else)
+ */
+export function techniqueFields(n) {
+  const out = {};
+  const bend = Number(n.bend);
+  if (bend > 0) {
+    out.bend = bend;
+    if (Array.isArray(n.bendCurve) && n.bendCurve.length >= 2) {
+      out.bendCurve = n.bendCurve
+        .map((p) => [Math.max(0, Math.min(1, Number(p[0]) || 0)), Math.max(0, Number(p[1]) || 0)]);
+    }
+    if (n.prebend) out.prebend = true;
+    if (n.release) out.release = true;
+  }
+  if (n.slideIn === 'below' || n.slideIn === 'above') out.slideIn = n.slideIn;
+  if (n.slideOut === 'up' || n.slideOut === 'down') out.slideOut = n.slideOut;
+  if (n.vibrato) out.vibrato = true;
+  return out;
+}
+
+/**
+ * Bend facts from a list of points [{pos 0..1, semis}] (any order). Returns {} for a flat line at zero.
+ * The peak is the bend; it is a pre-bend when it starts at (or near) the peak, a release when it ends lower.
+ */
+export function bendFromPoints(points) {
+  const pts = (Array.isArray(points) ? points : [])
+    .map((p) => [Number(p.pos), Number(p.semis)])
+    .filter((p) => Number.isFinite(p[0]) && Number.isFinite(p[1]))
+    .sort((a, b) => a[0] - b[0]);
+  if (!pts.length) return {};
+  const peak = Math.max(...pts.map((p) => p[1]));
+  if (!(peak > 0)) return {};
+  const first = pts[0][1];
+  const last = pts[pts.length - 1][1];
+  const curve = pts.map(([pos, s]) => [Math.round(Math.max(0, Math.min(1, pos)) * 1000) / 1000, Math.round(s * 100) / 100]);
+  if (curve.length === 1) curve.push([1, curve[0][1]]);
+  return {
+    bend: Math.round(peak * 100) / 100,
+    bendCurve: curve,
+    ...(first >= peak - 0.01 ? { prebend: true } : {}),
+    ...(last < peak - 0.01 ? { release: true } : {})
+  };
+}
+
 export const DEMO_SONG_TAB = [
   '# Title: Timberline Drive',
   '# Artist: Woodshed House Band',
@@ -64,7 +118,7 @@ export function makeSong(partial = {}) {
       tech: n.tech || '',
       tie: Boolean(n.tie),
       dead: Boolean(n.dead),
-      ...(Number(n.bend) > 0 ? { bend: Number(n.bend) } : {})
+      ...techniqueFields(n)
     };
   }).sort((a, b) => (a.t - b.t) || (a.string - b.string));
 

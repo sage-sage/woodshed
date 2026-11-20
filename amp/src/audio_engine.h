@@ -81,6 +81,13 @@ public:
     // Starts or restarts the ASIO stream off the audio thread.
     // Device selection priority: requestedDeviceName -> first containing "MOTU" -> ASIO default.
     bool restart(const std::string& requestedDeviceName, int inputChannel, double sampleRate, int requestedBufferFrames = 0);
+
+    // PortAudio lists devices only when it initializes, so an interface plugged in later stays invisible.
+    // Stops any streams and re-initializes PortAudio (Pa_Terminate + Pa_Initialize); call restart() after.
+    bool rescanDevices();
+    uint32_t rescanCount() const noexcept { return rescans_.load(std::memory_order_relaxed); }
+    // True while the open stream's callbacks keep arriving (false once its device has gone away).
+    bool streamAlive() const noexcept;
     void stopStream();
 
     // Opens the ASIO driver control panel for the active device.
@@ -186,6 +193,10 @@ private:
     double monitorRate_ = 48000.0;
     double monitorLatencyMs_ = 0.0;
     int monitorChannels_ = 2;
+    std::atomic<uint32_t> rescans_{0};
+    std::atomic<int64_t> lastCallbackQpc_{0};
+    std::atomic<bool> fadeOut_{false};
+    float outGain_ = 1.0f;   // audio thread only (set before Pa_StartStream)
     std::atomic<bool> monitorExclusive_{false};
     std::atomic<bool> monitorEnabled_{false};
     std::atomic<bool> monitorRunning_{false};

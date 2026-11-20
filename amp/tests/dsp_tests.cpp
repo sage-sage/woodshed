@@ -776,7 +776,115 @@ void testGuideAfterGate() {
     CHECK(maxErr < 1e-4f);
 }
 
+// Goertzel power of one frequency over buf[skip..n).
+double tonePower(const float* buf, int n, int skip, double freq, double fs) {
+    const double w = 2.0 * kPi * freq / fs;
+    const double c = 2.0 * std::cos(w);
+    double s1 = 0.0, s2 = 0.0;
+    for (int i = skip; i < n; ++i) {
+        const double s0 = static_cast<double>(buf[i]) + c * s1 - s2;
+        s2 = s1;
+        s1 = s0;
+    }
+    return s1 * s1 + s2 * s2 - c * s1 * s2;
+}
+
+void testMetalDistortion() {
+    using wsamp::dsp::BlockType;
+    constexpr double kFs = 48000.0;
+    constexpr int kBlock = 64;
+    const auto* spec = wsamp::dsp::findBlockSpec("metal");
+    CHECK(spec != nullptr);
+    if (!spec) return;
+    CHECK(spec->params.size() == 7);
+
+    // (a) A loud, guitar-like pluck train at max gain and extreme EQ, then silence: bounded, finite, no
+    //     denormals; the gate closes the tail to true silence.
+    {
+        auto m = wsamp::dsp::makeBlock(BlockType::Metal, "metal_a");
+        m->setParam(0, 10.0f);   // gain
+        m->setParam(2, 12.0f);   // low
+        m->setParam(4, 12.0f);   // high
+        m->setParam(5, 6.0f);    // level
+        m->setParam(6, -60.0f);  // gate
+        m->prepare(kFs, kBlock);
+        std::vector<float> sig(static_cast<size_t>(kFs * 3), 0.0f);
+        const double f0s[] = {82.41, 110.0, 146.83, 98.0};
+        for (int k = 0; k < 4; ++k) {
+            const int start = static_cast<int>(k * 0.5 * kFs);
+            for (int i = 0; i < static_cast<int>(0.5 * kFs); ++i) {
+                const double t = i / kFs;
+                double v = 0.0;
+                for (int h = 1; h <= 8; ++h) v += std::sin(2.0 * kPi * f0s[k] * h * t) / h;
+                sig[static_cast<size_t>(start + i)] = static_cast<float>(0.9 * v * std::exp(-3.0 * t));
+            }
+        }
+        bool finite = true, denorm = false;
+        float peak = 0.0f;
+        for (size_t off = 0; off < sig.size(); off += kBlock) {
+            m->process(sig.data() + off, kBlock);
+            for (int i = 0; i < kBlock; ++i) {
+                const float s = sig[off + static_cast<size_t>(i)];
+                if (!std::isfinite(s)) finite = false;
+                if (std::fpclassify(s) == FP_SUBNORMAL) denorm = true;
+                peak = std::max(peak, std::abs(s));
+            }
+        }
+        std::printf("metal: worst-case peak %.2f\n", peak);
+        CHECK(finite);
+        CHECK(!denorm);
+        CHECK(peak < 8.0f);     // +6 dB level and +12 dB shelves on a +-1 clipper
+        CHECK(peak > 0.05f);
+        // the last 0.5 s is silence: the gate has shut it fully
+        float tail = 0.0f;
+        for (size_t i = sig.size() - 12000; i < sig.size(); ++i) tail = std::max(tail, std::abs(sig[i]));
+        CHECK(tail == 0.0f);
+    }
+
+    // (b) More gain = more harmonics: a quiet 220 Hz sine, harmonic power (2..10) relative to the fundamental.
+    auto harmonicRatio = [&](float gain) {
+        auto m = wsamp::dsp::makeBlock(BlockType::Metal, "metal_b");
+        m->setParam(0, gain);
+        m->setParam(6, -80.0f);   // gate off
+        m->prepare(kFs, kBlock);
+        const int n = static_cast<int>(kFs);
+        std::vector<float> buf(static_cast<size_t>(n));
+        for (int i = 0; i < n; ++i) buf[static_cast<size_t>(i)] = static_cast<float>(0.02 * std::sin(2.0 * kPi * 220.0 * i / kFs));
+        for (int off = 0; off < n; off += kBlock) m->process(buf.data() + off, kBlock);
+        const double fund = tonePower(buf.data(), n, n / 2, 220.0, kFs);
+        double harm = 0.0;
+        for (int h = 2; h <= 10; ++h) harm += tonePower(buf.data(), n, n / 2, 220.0 * h, kFs);
+        return harm / std::max(fund, 1e-30);
+    };
+    const double lowGain = harmonicRatio(0.0f);
+    const double highGain = harmonicRatio(10.0f);
+    std::printf("metal: harmonics/fundamental at gain 0 = %.4f, at gain 10 = %.4f\n", lowGain, highGain);
+    CHECK(highGain > lowGain * 3.0);
+    // A fully squared-off sine tops out near 0.19 here (odd harmonics 1/h^2 up to 9), and the tone stack's
+    // top cut trims some of that, so 0.05 is a clear "heavily distorted" bar.
+    CHECK(highGain > 0.05);
+
+    // (c) Silence in, silence out (gate off, no DC from the asymmetric clipper), and no denormals.
+    {
+        auto m = wsamp::dsp::makeBlock(BlockType::Metal, "metal_c");
+        m->setParam(6, -80.0f);
+        m->prepare(kFs, kBlock);
+        std::array<float, kBlock> buf{};
+        bool ok = true;
+        for (int off = 0; off < 48000; off += kBlock) {
+            buf.fill(0.0f);
+            m->process(buf.data(), kBlock);
+            for (float s : buf) {
+                if (s != 0.0f && std::fpclassify(s) != FP_NORMAL) ok = false;
+                if (std::abs(s) > 1e-6f) ok = false;
+            }
+        }
+        CHECK(ok);
+    }
+}
+
 int main() {
+    testMetalDistortion();
     testGuideAfterGate();
     testBiquadMagnitude();
     testOversamplerAndAliasing();

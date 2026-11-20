@@ -20,6 +20,8 @@ public:
     static constexpr UINT_PTR kTimerTooltip = 1;
     static constexpr UINT_PTR kTimerUpdateFirst = 2;
     static constexpr UINT_PTR kTimerUpdateRepeat = 3;
+    static constexpr UINT_PTR kTimerDeviceRescan = 4;   // debounces WM_DEVICECHANGE bursts
+    static constexpr UINT kDeviceRescanDelayMs = 1500;
 
     explicit TrayApp(AppController& controller);
     ~TrayApp();

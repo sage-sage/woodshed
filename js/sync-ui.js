@@ -1,5 +1,6 @@
 import { tabToAudio, audioToTab, addAnchor, removeAnchor, shiftAll, fromOffsetAndScale } from './sync.js';
 import { HOP, SR } from './align.js';
+import { sparseSongWarning, checkAutoSyncSpread, firstSoundTime } from './autosync-check.js';
 import { createBackend, parseYouTubeId } from './player.js';
 import { GuideScheduler, resolveGuideTone } from './synth.js';
 import { suggestTone, baseToneId } from './tone-suggest.js';
@@ -158,7 +159,7 @@ export function mount(container, ctx) {
     }
 
     autoBtn.disabled = !decodedAudioBuffer;
-    autoBtn.textContent = 'Auto-sync';
+    autoBtn.textContent = sparseOverrideArmed ? 'Auto-sync anyway' : 'Auto-sync';
     nextBtn.disabled = !decodedAudioBuffer || lastMatchedStartAudio === null;
     statusEl.textContent = autoSyncStatusText;
   }
@@ -175,6 +176,8 @@ export function mount(container, ctx) {
   }
 
   let preAutoSyncAnchors = null;
+  // A near-empty track (e.g. a vocal track imported by mistake) gets a warning first; a second press syncs anyway.
+  let sparseOverrideArmed = false;
 
   function undoAutoSync() {
     if (!preAutoSyncAnchors) return;
@@ -198,6 +201,15 @@ export function mount(container, ctx) {
       updateAutoSyncUI();
       return;
     }
+    const sparseMsg = sparseSongWarning(song);
+    if (sparseMsg && !sparseOverrideArmed) {
+      sparseOverrideArmed = true;
+      autoSyncStatusText = `${sparseMsg} Press "Auto-sync anyway" to try regardless.`;
+      updateAutoSyncUI();
+      ctx.toast(sparseMsg, 'error');
+      return;
+    }
+    sparseOverrideArmed = false;
 
     await resumeAudio();
     isAutoSyncing = true;
@@ -212,6 +224,8 @@ export function mount(container, ctx) {
     try {
       const samples = await extractMonoSamples(decodedAudioBuffer);
       if (unmounted) return;
+      // Measured before the samples move to the worker: where the tempo-only fallback puts bar 1.
+      const firstSound = firstSoundTime(samples, SR);
 
       if (alignWorker) {
         alignWorker.terminate();
@@ -247,16 +261,32 @@ export function mount(container, ctx) {
       if (!preAutoSyncAnchors) preAutoSyncAnchors = sync.anchors.map((a) => ({ ...a }));
       const undoBtn = container.querySelector('#sync-undo-auto-btn');
       if (undoBtn) undoBtn.classList.remove('hidden');
-      sync.anchors = result.anchors;
       tapHistoryStack.length = 0;
       lastMatchedStartAudio = result.startAudio;
 
-      const qualityLabel = result.quality === 'good'
-        ? 'Good match'
-        : result.quality === 'check'
-          ? 'Not sure: press Play and listen, then keep it or Undo'
-          : 'Weak match: probably wrong. Undo, or try Find next match';
-      autoSyncStatusText = `Matched ${formatShortTime(result.startAudio)}\u2013${formatShortTime(result.endAudio)} of the recording \u00b7 ${qualityLabel}`;
+      // The match must spread over the music; points bunched into a few seconds (seen with near-empty tracks)
+      // are worse than no sync, so fall back to the tab's own tempo from the first sound.
+      const spread = checkAutoSyncSpread(result.anchors, {
+        songDuration: Number(song.duration) || 0,
+        audioDuration: startSec > 0 ? 0 : (decodedAudioBuffer?.duration || 0)
+      });
+      if (spread.ok) {
+        sync.anchors = result.anchors;
+        const qualityLabel = result.quality === 'good'
+          ? 'Good match'
+          : result.quality === 'check'
+            ? 'Not sure: press Play and listen, then keep it or Undo'
+            : 'Weak match: probably wrong. Undo, or try Find next match';
+        autoSyncStatusText = `Matched ${formatShortTime(result.startAudio)}\u2013${formatShortTime(result.endAudio)} of the recording \u00b7 ${qualityLabel}`;
+      } else {
+        const bar1 = Number(song.bars?.[0]?.t) || 0;
+        sync.anchors = [{ tab: bar1, audio: firstSound }];
+        result.startAudio = firstSound;
+        autoSyncStatusText = `Auto-sync didn't find a believable match (${spread.reason}). ` +
+          `Using the tab's tempo instead, with bar 1 at the first sound (${formatTime(firstSound)}). ` +
+          'Listen, then fix the start with Mark First Note or by tapping bars.';
+        ctx.toast("Auto-sync couldn't match this recording: using tempo only", 'error');
+      }
 
       scheduler?.reset();
       renderAnchorList();
@@ -939,13 +969,17 @@ export function mount(container, ctx) {
 
       c.save();
       c.scale(dpr, dpr);
-      c.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--screen').trim() || '#101113';
+      const cssVar = (name, fallback) => {
+        const v = getComputedStyle(canvas).getPropertyValue(name).trim();
+        return v || fallback;
+      };
+      c.fillStyle = cssVar('--screen', '#101113');
       c.fillRect(0, 0, w, h);
 
       // 1. Audio Time Ruler (top 24px)
-      c.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--screen-2').trim() || '#17191c';
+      c.fillStyle = cssVar('--screen-2', '#17191c');
       c.fillRect(0, 0, w, 24);
-      c.strokeStyle = 'rgba(241, 231, 208, 0.16)';
+      c.strokeStyle = cssVar('--tl-grid', 'rgba(241, 231, 208, 0.16)');
       c.beginPath();
       c.moveTo(0, 24);
       c.lineTo(w, 24);
@@ -954,12 +988,12 @@ export function mount(container, ctx) {
       const firstSec = Math.floor(viewStartSec);
       const lastSec = Math.ceil(viewStartSec + spanSec);
       const stepSec = pxPerSec < 45 ? 5 : pxPerSec < 90 ? 2 : 1;
-      c.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--screen-cream-muted').trim() || '#a69a86';
+      c.fillStyle = cssVar('--screen-cream-muted', '#a69a86');
       c.font = '600 10px ui-monospace, monospace';
       for (let s = firstSec - (firstSec % stepSec); s <= lastSec; s += stepSec) {
         if (s < 0) continue;
         const x = (s - viewStartSec) * pxPerSec;
-        c.strokeStyle = 'rgba(241, 231, 208, 0.12)';
+        c.strokeStyle = cssVar('--tl-grid-faint', 'rgba(241, 231, 208, 0.12)');
         c.beginPath();
         c.moveTo(x, 16);
         c.lineTo(x, 24);
@@ -972,9 +1006,9 @@ export function mount(container, ctx) {
       const rowH = 11;
       const tabH = nStr * rowH + 12;
       const tabTop = h - tabH;
-      c.fillStyle = 'rgba(0, 0, 0, 0.22)';
+      c.fillStyle = cssVar('--tl-shade', 'rgba(0, 0, 0, 0.22)');
       c.fillRect(0, tabTop, w, tabH);
-      c.strokeStyle = 'rgba(241, 231, 208, 0.18)';
+      c.strokeStyle = cssVar('--tl-grid-strong', 'rgba(241, 231, 208, 0.18)');
       c.lineWidth = 1;
       for (let si = 0; si < nStr; si++) {
         const y = Math.round(tabTop + 6 + si * rowH + rowH / 2) + 0.5;
@@ -985,8 +1019,8 @@ export function mount(container, ctx) {
       }
       const tabLo = audioToTab(sync, viewStartSec) - 0.5;
       const tabHi = audioToTab(sync, viewStartSec + spanSec) + 0.5;
-      const cream = getComputedStyle(document.documentElement).getPropertyValue('--screen-cream').trim() || '#f1e7d0';
-      const screenBg = getComputedStyle(document.documentElement).getPropertyValue('--screen').trim() || '#101113';
+      const cream = cssVar('--screen-cream', '#f1e7d0');
+      const screenBg = cssVar('--screen', '#101113');
       c.font = '700 10px ui-monospace, monospace';
       c.textAlign = 'center';
       c.textBaseline = 'middle';
@@ -997,7 +1031,10 @@ export function mount(container, ctx) {
         const row = nStr - 1 - n.string;
         if (row < 0 || row >= nStr) continue;
         const ny = tabTop + 6 + row * rowH + rowH / 2;
-        const label = n.dead ? 'x' : String(n.fret);
+        // Techniques in plain tab letters: h7 / p5 / s9 before, 7b / 7br / 7\ after
+        const pre = n.tech === 'h' || n.tech === 'p' ? n.tech : (n.tech === 'slide' || n.slideIn ? 's' : '');
+        const post = (n.bend > 0 ? (n.release ? 'br' : 'b') : '') + (n.slideOut === 'down' ? '\\' : n.slideOut === 'up' ? '/' : '');
+        const label = n.dead ? 'x' : `${pre}${n.fret}${post}`;
         const tw = c.measureText(label).width + 4;
         c.fillStyle = screenBg;
         c.fillRect(nx - tw / 2, ny - 5, tw, 10);
@@ -1038,10 +1075,10 @@ export function mount(container, ctx) {
         const isNextTap = bIdx === tapBarIndex;
 
         c.strokeStyle = isAnchored
-          ? (getComputedStyle(document.documentElement).getPropertyValue('--jewel').trim() || '#e0352b')
+          ? (cssVar('--jewel', '#e0352b'))
           : isNextTap
-            ? (getComputedStyle(document.documentElement).getPropertyValue('--ok').trim() || '#4fb36b')
-            : 'rgba(241, 231, 208, 0.28)';
+            ? (cssVar('--ok', '#4fb36b'))
+            : cssVar('--tl-idle', 'rgba(241, 231, 208, 0.28)');
         c.lineWidth = isAnchored ? 2.2 : 1.2;
         c.beginPath();
         c.moveTo(bx, 24);
@@ -1050,13 +1087,13 @@ export function mount(container, ctx) {
 
         // Pin head for anchored bar
         if (isAnchored) {
-          c.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--jewel').trim() || '#e0352b';
+          c.fillStyle = cssVar('--jewel', '#e0352b');
           c.beginPath();
           c.arc(bx, 32, 6, 0, Math.PI * 2);
           c.fill();
         }
 
-        c.fillStyle = isAnchored ? (getComputedStyle(document.documentElement).getPropertyValue('--jewel').trim() || '#e0352b') : isNextTap ? (getComputedStyle(document.documentElement).getPropertyValue('--ok').trim() || '#4fb36b') : (getComputedStyle(document.documentElement).getPropertyValue('--screen-cream').trim() || '#f1e7d0');
+        c.fillStyle = isAnchored ? cssVar('--jewel', '#e0352b') : isNextTap ? cssVar('--ok', '#4fb36b') : cssVar('--screen-cream', '#f1e7d0');
         c.font = '700 11px sans-serif';
         c.fillText(`Bar ${bIdx + 1}`, bx + 5, 48);
       }
@@ -1064,7 +1101,7 @@ export function mount(container, ctx) {
       // 4. Playhead
       const playX = (audioNow - viewStartSec) * pxPerSec;
       if (playX >= 0 && playX <= w) {
-        c.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--bad').trim() || '#d8452f';
+        c.strokeStyle = cssVar('--bad', '#d8452f');
         c.lineWidth = 2;
         c.beginPath();
         c.moveTo(playX, 0);
@@ -1077,14 +1114,23 @@ export function mount(container, ctx) {
     }
 
     rafId = requestAnimationFrame(draw);
+
+    function onThemeChanged() {
+      if (unmounted) return;
+      if (rafId) cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(draw);
+    }
+    window.addEventListener('woodshed:theme-changed', onThemeChanged);
+    return onThemeChanged;
   }
 
-  initSyncWorkspace();
+  const _syncThemeHandler = initSyncWorkspace();
 
   return {
     unmount() {
       unmounted = true;
       if (rafId) cancelAnimationFrame(rafId);
+      if (_syncThemeHandler) window.removeEventListener('woodshed:theme-changed', _syncThemeHandler);
       if (saveTimer) clearTimeout(saveTimer);
       if (alignWorker) {
         alignWorker.terminate();

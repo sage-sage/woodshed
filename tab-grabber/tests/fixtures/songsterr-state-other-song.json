@@ -1,0 +1,19 @@
+{
+  "route": { "page": "tab" },
+  "meta": {
+    "songId": 29672,
+    "partId": 1,
+    "revisionId": null,
+    "current": {
+      "songId": 29672,
+      "revisionId": 555001,
+      "image": "v0-3-2-OLDSONGxxxxxxxxx",
+      "title": "Some Other Song",
+      "partId": 1,
+      "tracks": [
+        { "instrumentId": 25, "instrument": "Acoustic Guitar (steel)", "name": "Lead Acoustic", "partId": 0 },
+        { "instrumentId": 52, "instrument": "Choir Aahs", "name": "Clydie King | Backing Vocals", "partId": 1, "isVocalTrack": true }
+      ]
+    }
+  }
+}

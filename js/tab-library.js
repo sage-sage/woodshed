@@ -58,6 +58,12 @@ function sanitizeEntry(raw, requireText = false) {
 
   if (requireText) {
     entry.text = text;
+    // A saved Songsterr tab keeps its exact-rhythm data (and video timings); without it the import fell back
+    // to the plain text and lost the track info.
+    const n = raw.notation;
+    if (n && typeof n === 'object' && !Array.isArray(n) && n.format === 'songsterr' && Array.isArray(n.measures)) {
+      entry.notation = n;
+    }
   }
   return entry;
 }

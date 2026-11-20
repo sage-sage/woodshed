@@ -1433,57 +1433,109 @@
     };
   }
 
-  async function readSongsterrNotation(url, title, artist) {
+  function readShownSongsterrTrack() {
+    return {
+      headerTexts: Array.from(document.querySelectorAll('[data-testid="header-track-name"]'))
+        .map((el) => (el.textContent || '').trim())
+        .filter(Boolean),
+      domPartIds: Array.from(document.querySelectorAll('[data-part-id]'))
+        .map((el) => el.getAttribute('data-part-id'))
+    };
+  }
+
+  async function fetchSongsterrPart(partUrl, songId) {
     try {
-      const pageState = parseSongsterrPageState();
-      const stateMeta = pageState && typeof pageState.meta === 'object' ? pageState.meta : {};
-      let songId = stateMeta.songId ?? pageState?.song?.songId ?? null;
-      if (songId === null || songId === undefined || songId === '') {
-        const urlMatch = String(url || window.location.href || '').match(/-s(\d+)/);
-        if (urlMatch) songId = urlMatch[1];
-      }
-      if (songId === null || songId === undefined || songId === '') return null;
-
-      // The shown track: Songsterr puts it in the address ("...-s53923t2" = track 2) once you switch tracks;
-      // otherwise the rendered tab carries data-part-id, else the page state's initial part.
-      const urlTrack = String(url || window.location.href || '').match(/-s\d+t(\d+)(?:[/?#]|$)/);
-      const partEl = document.querySelector('[data-line] [data-part-id], [data-part-id][data-line], [data-part-id]');
-      const attrPartId = partEl ? partEl.getAttribute('data-part-id') : null;
-      const partId = urlTrack
-        ? urlTrack[1]
-        : (attrPartId !== null && attrPartId.trim() !== '' ? attrPartId.trim() : String(stateMeta.partId ?? 0));
-
-      const entries = typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function'
-        ? performance.getEntriesByType('resource')
-        : [];
-      const pathRe = new RegExp(`^/${escapeRegExpStr(songId)}/(\\d+)/[^/]+/${escapeRegExpStr(partId)}\\.json$`);
-      let matchedUrl = null;
-      let revisionId = null;
-
-      for (let i = entries.length - 1; i >= 0; i--) {
-        const name = entries[i] && entries[i].name;
-        if (typeof name !== 'string') continue;
-        try {
-          const parsedUrl = new URL(name);
-          if (!parsedUrl.hostname.toLowerCase().endsWith('cloudfront.net')) continue;
-          const m = parsedUrl.pathname.match(pathRe);
-          if (m) {
-            matchedUrl = name;
-            revisionId = parseInt(m[1], 10);
-            break;
-          }
-        } catch (_err) {
-          // ignore non-URL resource entry
-        }
-      }
-      if (!matchedUrl) return null;
-
-      const resp = await fetch(matchedUrl, { credentials: 'omit', cache: 'force-cache' });
+      const resp = await fetch(partUrl, { credentials: 'omit', cache: 'force-cache' });
       if (!resp.ok) return null;
       const raw = await resp.json();
       if (!raw || typeof raw !== 'object') return null;
       if (!Array.isArray(raw.measures) || raw.measures.length === 0) return null;
       if (!Array.isArray(raw.tuning) || raw.tuning.length === 0) return null;
+      // The data names its own song: never accept another song's track.
+      if (raw.songId !== undefined && raw.songId !== null && String(raw.songId) !== String(songId)) return null;
+      return raw;
+    } catch (_err) {
+      return null;
+    }
+  }
+
+  async function readSongsterrNotation(url, title, artist) {
+    try {
+      const T = globalThis.WoodshedSongsterrTracks;
+      if (!T) return null;
+      const chosenPartId = globalThis.__woodshedSongsterrPart;
+      delete globalThis.__woodshedSongsterrPart;
+      const pageUrl = String(url || window.location.href || '');
+      const pageState = parseSongsterrPageState();
+
+      // The tab may still be drawing (or the page just switched song): give it up to 5 s to show a track name.
+      let shown = readShownSongsterrTrack();
+      for (let waited = 0; waited < 5000 && shown.headerTexts.length === 0 && shown.domPartIds.length === 0; waited += 250) {
+        await new Promise((r) => setTimeout(r, 250));
+        shown = readShownSongsterrTrack();
+      }
+
+      const urlSongId = T.parseSongsterrUrl(pageUrl).songId;
+      const stateSongId = pageState?.meta?.songId ?? pageState?.meta?.current?.songId ?? null;
+      const songIdGuess = urlSongId ?? (stateSongId !== null ? String(stateSongId) : null);
+      if (!songIdGuess) return null;
+      // The page's state is from the first page you opened on Songsterr; when it is for another song, ask
+      // Songsterr for this song's track list (the same list the page loads).
+      let apiMeta = null;
+      if (String(stateSongId) !== songIdGuess) {
+        try {
+          const r = await fetch(`/api/meta/${encodeURIComponent(songIdGuess)}`, { credentials: 'omit' });
+          if (r.ok) apiMeta = await r.json();
+        } catch (_err) {
+          apiMeta = null;
+        }
+      }
+
+      const pick = T.resolveSongsterrTrack({
+        url: pageUrl,
+        state: pageState,
+        apiMeta,
+        headerTexts: shown.headerTexts,
+        domPartIds: shown.domPartIds,
+        chosenPartId
+      });
+      const songId = pick.songId;
+      const resourceNames = (typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function'
+        ? performance.getEntriesByType('resource')
+        : []).map((e) => e && e.name).filter((n) => typeof n === 'string');
+
+      // Note counts for every track, so the popup can offer a choice and flag a near-empty track.
+      const trackList = pick.tracks.map((t) => ({ ...t, notes: null }));
+      await Promise.all(trackList.map(async (t) => {
+        const loc = T.findPartJsonUrl(resourceNames, { songId, revisionId: pick.revisionId, image: pick.image, partId: t.partId });
+        const raw = loc ? await fetchSongsterrPart(loc.url, songId) : null;
+        if (raw) {
+          t.notes = T.countPlayedNotes(raw);
+          t.bars = raw.measures.length;
+        }
+      }));
+
+      if (pick.partId === null) {
+        if (trackList.length === 0) return null;
+        return {
+          ok: false,
+          site: 'Songsterr',
+          url,
+          title,
+          artist,
+          kind: 'choose-track',
+          tracks: trackList,
+          text: '',
+          message: "Couldn't tell which track this page shows. Pick the track to grab:"
+        };
+      }
+
+      const loc = T.findPartJsonUrl(resourceNames, { songId, revisionId: pick.revisionId, image: pick.image, partId: pick.partId });
+      if (!loc) return null;
+      const raw = await fetchSongsterrPart(loc.url, songId);
+      if (!raw) return null;
+      const revisionId = loc.revisionId;
+      const partId = pick.partId;
 
       async function readSongsterrVideos(songId, revisionId) {
         try {
@@ -1524,7 +1576,30 @@
       const tuning = notation.tuning.map((m) => midiToSharpName(m)).join(' ');
       const trackName = notation.name || 'Track 1';
 
+      const noteCount = T.countPlayedNotes(raw);
+      const listed = trackList.find((t) => t.partId === partId);
+      const playable = listed ? listed.playable : T.isPlayableTrack(raw);
+      const sourceLabel = {
+        chosen: 'your pick',
+        header: 'the track shown on the page',
+        page: 'the track drawn on the page',
+        address: 'the address bar',
+        state: "the page's starting track"
+      }[pick.partSource] || pick.partSource;
+      const warnParts = [`Exact rhythm from Songsterr (track: ${trackName}, ${noteCount} notes; chosen from ${sourceLabel}).`];
+      const better = trackList.filter((t) => t.partId !== partId && t.playable && Number.isFinite(t.notes) && !T.isSparseTrack(t.notes, t.bars));
+      if (T.isSparseTrack(noteCount, raw.measures.length)) {
+        warnParts.push(`This track has only ${noteCount} notes for ${raw.measures.length} bars, probably not the guitar part.`);
+      } else if (!playable) {
+        warnParts.push(`"${raw.instrument || trackName}" isn't a guitar or bass track.`);
+      }
+      if (warnParts.length > 1 && better.length > 0) warnParts.push('Pick another track below.');
+
       return {
+        tracks: trackList,
+        partId,
+        trackWarning: warnParts.length > 1,
+        diagnostics: pick.notes,
         ok: true,
         site: 'Songsterr',
         url,
@@ -1536,7 +1611,7 @@
         kind: 'tab',
         text,
         notation,
-        warning: `Exact rhythm from Songsterr (track: ${trackName}).`
+        warning: warnParts.join(' ')
       };
     } catch (_err) {
       return null;

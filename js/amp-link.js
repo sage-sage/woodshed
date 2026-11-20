@@ -300,6 +300,8 @@ export class AmpLink extends EventTarget {
     this._scriptNode = null;
     this._useWorklet = false;
 
+    this._presetPending = null;   // preset id sent and not yet answered with a presets message
+
     this._onVisibilityChange = this._handleVisibilityChange.bind(this);
   }
 
@@ -394,6 +396,7 @@ export class AmpLink extends EventTarget {
       if (this._ws !== ws) return;
       this._backoffMs = 1000;
       this._pausedForHidden = false;
+      this._presetPending = null;
       this.serverInfo = null;
       this.jitterBuffer.reset();
       if (this._workletNode) {
@@ -465,6 +468,7 @@ export class AmpLink extends EventTarget {
       this.status = msg;
       this._emit('status', msg);
     } else if (msg.type === 'presets') {
+      this._presetPending = null;
       this.presets = {
         current: msg.current ?? null,
         list: Array.isArray(msg.list) ? msg.list : [],
@@ -618,8 +622,17 @@ export class AmpLink extends EventTarget {
     return this._send({ type: 'guide', gain });
   }
 
+  /**
+   * Asks the amp for preset `id`. Skipped when it is already the amp's preset and no other choice is on its
+   * way: the amp answers every switch with a presets message, so a listener that re-applies its tone on each
+   * presets message would otherwise loop (2.5.3's play screen did, hundreds of reloads a second).
+   */
   setPreset(id) {
-    return this._send({ type: 'preset', id: String(id) });
+    const want = String(id);
+    if (this._presetPending === null && this.presets?.current === want) return false;
+    const sent = this._send({ type: 'preset', id: want });
+    if (sent) this._presetPending = want;
+    return sent;
   }
 
   setParam(id, key, value) {
@@ -748,6 +761,11 @@ export class AmpLink extends EventTarget {
 
   openAsioPanel() {
     return this._send({ type: 'asioPanel' });
+  }
+
+  /** Woodshed Amp 2.5.4+: re-list audio devices and reopen the saved interface (answers with devices + status). */
+  rescanDevices() {
+    return this._send({ type: 'rescanDevices' });
   }
 
   setStreaming(on) {

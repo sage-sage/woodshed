@@ -16,6 +16,7 @@ import { mount as mountSetup } from './setup.js';
 import { runCalibration } from './calibrate.js';
 import { fetchLatest, compareVersions } from './updates.js';
 import { isDesktop, desktop, SETUP_URL, wireDesktopUpdates, mountTitleBar, updateState, installUpdate, postToHost, openUpdateDialog } from './desktop.js';
+import { installNavGuard } from './nav-guard.js';
 import {
   detectTabLibrary,
   getExtensionVersion,
@@ -25,6 +26,7 @@ import {
   onSavedTabsChange
 } from './tab-library.js';
 import { startGuideRouting } from './guide-route.js';
+import { startAmpDiag } from './amp-diag.js';
 
 const input = new GuitarInput();
 const synth = new GuitarSynth();
@@ -42,7 +44,8 @@ function applyTheme() {
 }
 applyTheme();
 systemLight?.addEventListener?.('change', () => { if ((settings.get('theme') || 'dark') === 'system') applyTheme(); });
-startGuideRouting({ amp, synth, settings });
+const guideRoute = startGuideRouting({ amp, synth, settings, input });
+startAmpDiag({ amp, settings, audioCtx: synth.ctx, getRouteDiag: () => guideRoute.diag });
 
 let currentViewInstance = null;
 let currentRecord = null;
@@ -66,9 +69,17 @@ function isValidSongsterrNotation(val) {
   }
 }
 
+let lastAcceptedImportTs = null;
+
 function acceptTabImport(p, { ack = false } = {}) {
   if (!p || typeof p !== 'object') return false;
   if (typeof p.ts !== 'number' || !Number.isFinite(p.ts)) return false;
+  // The Tab Grabber bridge re-posts a send every 0.5 s until it hears back; a repeat must not restart the
+  // import screen (it would wipe what you already picked). Just acknowledge it again.
+  if (p.ts === lastAcceptedImportTs) {
+    if (ack) window.postMessage({ source: 'woodshed', type: 'import-tab-received', ts: p.ts }, window.location.origin);
+    return true;
+  }
   const hasNotation = p.notation !== undefined && p.notation !== null;
   if (hasNotation && !isValidSongsterrNotation(p.notation)) return false;
   if (hasNotation) {
@@ -97,6 +108,7 @@ function acceptTabImport(p, { ack = false } = {}) {
     url: p.url || '',
     ts: p.ts
   };
+  lastAcceptedImportTs = p.ts;
 
   if (ack) {
     window.postMessage({ source: 'woodshed', type: 'import-tab-received', ts: p.ts }, window.location.origin);
@@ -153,7 +165,14 @@ function toast(msg, kind = 'info', opts = {}) {
   }, opts.actionLabel ? 9000 : 4800);
 }
 
+// Undo a swipe / mouse-back that would leave a playing song (js/nav-guard.js); clicks and keys still navigate.
+const navGuard = installNavGuard({
+  isPlaying: () => ['playing', 'countin'].includes(window.woodshed?.game?.state),
+  onBlocked: () => toast('Pause the song first to leave it.', 'info'),
+});
+
 function navigate(route) {
+  navGuard.markIntent();
   if (location.hash === route) {
     handleRouteChange();
   } else {
@@ -1288,6 +1307,11 @@ function mountSettings(container) {
     return Math.max(0, Math.min(100, Math.round(((val + 60) / 60) * 100)));
   }
 
+  function ampGlitchText(st) {
+    if (!st) return '—';
+    return `${Number(st.xruns) || 0} · ${Number(st.guide?.underruns) || 0} · ${Number(st.streamDrops) || 0}`;
+  }
+
   let renderedPresetId = null;
   function updateAmpStatusUI() {
     const st = amp.status;
@@ -1312,6 +1336,8 @@ function mountSettings(container) {
     if (bufEl) bufEl.textContent = st.bufferFrames ? `${st.bufferFrames} smp` : '—';
     if (rtEl) rtEl.textContent = Number.isFinite(st.roundTripMs) ? `${st.roundTripMs.toFixed(1)} ms` : '—';
     if (cpuEl) cpuEl.textContent = Number.isFinite(st.cpu) ? `${Math.round(st.cpu * 100)}%` : '—';
+    const glitchEl = container.querySelector('#amp-stat-glitch');
+    if (glitchEl) glitchEl.textContent = ampGlitchText(st);
     if (inMeter) inMeter.style.width = `${dbToPercent(st.inPeakDb)}%`;
     if (outMeter) outMeter.style.width = `${dbToPercent(st.outPeakDb)}%`;
     if (chanSel && Number.isInteger(st.inputChannel)) chanSel.value = String(st.inputChannel);
@@ -1693,6 +1719,10 @@ function mountSettings(container) {
           <span class="stat-label">CPU</span>
           <span class="stat-value tabular" id="amp-stat-cpu" style="font-size:0.95rem;">${Number.isFinite(st.cpu) ? `${Math.round(st.cpu * 100)}%` : '—'}</span>
         </div>
+        <div class="stat" title="Interface over/underruns · guide gaps · dropped stream audio. If you hear static and none of these move, the crackle is not coming from Woodshed Amp's processing.">
+          <span class="stat-label">Glitches</span>
+          <span class="stat-value tabular" id="amp-stat-glitch" style="font-size:0.95rem;">${ampGlitchText(st)}</span>
+        </div>
       </div>
 
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:12px;">
@@ -1753,9 +1783,18 @@ function mountSettings(container) {
           <button type="button" class="btn ${st.bypass ? 'btn-primary' : ''}" id="amp-btn-bypass">Bypass</button>
           <button type="button" class="btn ${st.mute ? 'btn-primary' : ''}" id="amp-btn-mute">Mute</button>
           <button type="button" class="btn" id="amp-btn-asio">ASIO control panel</button>
+          ${amp.serverInfo?.features?.includes('rescan') ? '<button type="button" class="btn" id="amp-btn-rescan" title="Look again for audio interfaces (one plugged in after Woodshed Amp started). Stops the sound for a moment.">Rescan devices</button>' : ''}
         </div>
       </div>
       <p style="margin:-6px 0 14px;font-size:0.8rem;color:var(--text-muted);">${escapeHtml(monitorNote)}${st.bufferNote ? ` ${escapeHtml(st.bufferNote)}` : ''}</p>
+      <p style="margin:-6px 0 14px;font-size:0.8rem;color:var(--text-muted);">
+        Static while a song plays? The song's video plays through Windows. If Windows' default output is the same
+        interface Woodshed Amp uses, set that device's Windows sample rate to ${st.sampleRate ? `${st.sampleRate} Hz` : "the amp's rate"}
+        (Sound settings &gt; the device &gt; Properties &gt; Advanced), or pick another Windows output.
+        <label style="display:inline-flex;align-items:center;gap:6px;margin-left:6px;">
+          <input type="checkbox" id="amp-diag-toggle" ${settings.get('ampDiag') ? 'checked' : ''} /> Show glitch counters on every screen
+        </label>
+      </p>
 
       <div>
         <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:6px;">
@@ -1809,6 +1848,14 @@ function mountSettings(container) {
 
     body.querySelector('#amp-btn-asio')?.addEventListener('click', () => {
       amp.openAsioPanel();
+    });
+
+    body.querySelector('#amp-btn-rescan')?.addEventListener('click', () => {
+      amp.rescanDevices();
+    });
+
+    body.querySelector('#amp-diag-toggle')?.addEventListener('change', (e) => {
+      settings.set('ampDiag', e.target.checked);
     });
 
     body.querySelectorAll('.amp-select-preset').forEach((btn) => {
@@ -2325,7 +2372,7 @@ async function boot() {
   amp.connect();
   updateRailStatus();
   updateRailMeterLoop();
-  window.addEventListener('hashchange', handleRouteChange);
+  window.addEventListener('hashchange', (e) => { if (!navGuard.check(e)) handleRouteChange(); });
   if (!settings.get('setupDone') && (!location.hash || location.hash === '#/library')) {
     location.hash = '#/setup';
   } else if (!location.hash) {

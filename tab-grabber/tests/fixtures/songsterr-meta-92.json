@@ -1,0 +1,14 @@
+{
+  "songId": 92,
+  "revisionId": 10169787,
+  "image": "v0-3-2-wHwG8E4LZGKBGYQW",
+  "artist": "The Cure",
+  "title": "Boys Don't Cry",
+  "tracks": [
+    { "instrumentId": 71, "instrument": "Clarinet", "name": "Robert Smith | Vocals", "tuning": [64, 59, 55, 50, 45, 40], "isVocalTrack": true, "isEmpty": false, "partId": null },
+    { "instrumentId": 29, "instrument": "Overdriven Guitar", "name": "Robert Smith | Woolworth Top 20 | Lead Guitar", "tuning": [64, 59, 55, 50, 45, 40], "isVocalTrack": false, "isEmpty": false, "partId": null },
+    { "instrumentId": 27, "instrument": "Electric Guitar (clean)", "name": "Robert Smith | Woolworth Top 20 | Rhythm Guitar", "tuning": [64, 59, 55, 50, 45, 40], "isVocalTrack": false, "isEmpty": false, "partId": null },
+    { "instrumentId": 34, "instrument": "Electric Bass (pick)", "name": "Mike Dempsey | Fender Precision Bass", "tuning": [43, 38, 33, 28], "isVocalTrack": false, "isEmpty": false, "partId": null },
+    { "instrumentId": 1024, "instrument": "Drums", "name": "Laurence Tolhurst | Yamaha D-22 Kit | Drums", "isVocalTrack": false, "isEmpty": false, "partId": null }
+  ]
+}

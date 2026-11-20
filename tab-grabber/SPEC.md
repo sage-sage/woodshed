@@ -9,7 +9,9 @@ It never calls a site's private API (two exceptions on Songsterr, both data the 
 being viewed: the note-data file for the shown track, to get the exact rhythm, approved by the user on 2026-11-15; and the
 video-points list `/api/video-points/<songId>/<revisionId>/list`, the per-bar YouTube timings, so Woodshed can start a
 song already synced, approved by the user on 2026-11-16 knowing Songsterr sells uninterrupted video sync in its Plus
-plan; the user asked that this not be advertised in the UI), never bypasses login or paywalls (Ultimate Guitar "Pro"/"Official" tabs that are
+plan; the user asked that this not be advertised in the UI; and the song's track list `/api/meta/<songId>`, read only when
+the page's embedded state is stale after moving between songs inside Songsterr, so the right track is picked, approved by
+the user on 2026-11-17), never bypasses login or paywalls (Ultimate Guitar "Pro"/"Official" tabs that are
 locked stay locked: show "This tab isn't available as text on this page"), never runs on pages until the user clicks
 the extension (activeTab + scripting), and sends nothing anywhere except to the Woodshed tab the user chose, or, when no Woodshed tab is open, to Woodshed Amp on
 this computer (ws://127.0.0.1:47800), which hands the tab only to the open Woodshed desktop app (the amp accepts extension

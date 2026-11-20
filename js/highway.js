@@ -45,6 +45,14 @@ export class Highway {
     this.canvas.addEventListener('pointerdown', this._onPointerDown);
     window.addEventListener('pointermove', this._onPointerMove);
     window.addEventListener('pointerup', this._onPointerUp);
+
+    this._onTheme = () => {
+      this._readTheme();
+      if (this._lastRender) this.render(this._lastRender);
+    };
+    if (typeof window !== 'undefined') {
+      window.addEventListener('woodshed:theme-changed', this._onTheme);
+    }
   }
 
   _readTheme() {
@@ -60,10 +68,10 @@ export class Highway {
     this.theme = {
       bg,
       staffLine: readVar('--line', '#3a342e'),
-      barLine: '#5a5249',
+      barLine: readVar('--hw-barline', '#5a5249'),
       barNum: readVar('--fg-faint', '#6f675d'),
       fretNum: readVar('--fg', '#ece7df'),
-      techMark: '#d6cfc4',
+      techMark: readVar('--hw-techmark', '#d6cfc4'),
       hit: readVar('--good', '#a3d4a0'),
       miss: readVar('--bad', '#e6a092'),
       waiting: readVar('--warn', '#e9d29a'),
@@ -79,6 +87,8 @@ export class Highway {
       jewel: readVar('--bad', '#e6a092'),
       ok: readVar('--good', '#a3d4a0'),
       bad: readVar('--bad', '#e6a092'),
+      wound: readVar('--hw-wound', 'rgba(176, 141, 87, 0.38)'),
+      glow: readVar('--hw-glow', 'rgba(214, 162, 108, 0.35)'),
       lozenge: readVar('--panel', '#2b2723'),
       monoFont: readVar('--font-mono', '"JetBrains Mono", ui-monospace, monospace'),
       bodyFont: readVar('--font-body', '"Inter", system-ui, -apple-system, sans-serif'),
@@ -268,7 +278,9 @@ export class Highway {
     const availH = Math.max(30, availBottom - availTop);
 
     const numStrings = this.song.tuning.length;
-    const laneGap = Math.max(12, Math.min(46, availH / 6.5)); // small previews shrink instead of cropping the staff
+    // Lanes fill the panel: (strings - 1) gaps plus ~1.5 gaps of room for chord names, bar numbers and bend
+    // labels. Small previews shrink instead of cropping the staff; tall panels stop at 120 px between strings.
+    const laneGap = Math.max(12, Math.min(120, availH / (Math.max(1, numStrings - 1) + 1.5)));
     const staffSpan = Math.max(0, numStrings - 1) * laneGap;
     const centerY = availTop + availH / 2;
     const topLineY = centerY - staffSpan / 2;
@@ -330,7 +342,7 @@ export class Highway {
       const y = yForString(s);
       // Like real strings: thicker toward the low E, and the three wound ones carry a faint bronze tint.
       ctx.lineWidth = Math.max(0.8, 1.6 - s * 0.14);
-      ctx.strokeStyle = s < 3 && numStrings >= 6 ? 'rgba(176, 141, 87, 0.38)' : t.staffLine;
+      ctx.strokeStyle = s < 3 && numStrings >= 6 ? (t.wound || 'rgba(176, 141, 87, 0.38)') : t.staffLine;
       ctx.beginPath();
       ctx.moveTo(0, y);
       ctx.lineTo(w, y);
@@ -346,7 +358,7 @@ export class Highway {
     ctx.strokeStyle = t.playhead;
     ctx.lineWidth = 2;
     ctx.shadowBlur = 9;
-    ctx.shadowColor = 'rgba(214, 162, 108, 0.35)';
+    ctx.shadowColor = t.glow || 'rgba(214, 162, 108, 0.35)';
     ctx.beginPath();
     ctx.moveTo(strikeX, ovH + 4);
     ctx.lineTo(strikeX, h - 6);
@@ -354,7 +366,9 @@ export class Highway {
     ctx.restore();
 
     // 6. Events & Notes (JetBrains Mono tab numbers)
-    const fontSize = Math.round(Math.max(14, Math.min(24, laneGap * 0.62)));
+    const fontSize = Math.round(Math.max(14, Math.min(30, laneGap * 0.62)));
+    const markScale = Math.max(1, fontSize / 20); // technique glyphs grow with the fret numbers
+    const markFont = `700 ${Math.round(11 * markScale)}px system-ui, -apple-system, sans-serif`;
     const noteFont = `700 ${fontSize}px ${t.monoFont}`;
     const noteLabel = (n) => (n.dead ? 'x' : (showNoteNames ? midiToName(n.midi).replace(/\d+$/, '') : String(n.fret)));
 
@@ -376,7 +390,7 @@ export class Highway {
         ctx.save();
         ctx.strokeStyle = t.techMark;
         ctx.fillStyle = t.techMark;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1.5 * markScale;
         ctx.lineCap = 'round';
 
         if (n.tech === 'slide') {
@@ -392,7 +406,7 @@ export class Highway {
             rising = true;
           }
           if (x1 <= x0 + 4) x0 = x1 - 14;
-          const dy = 0.175 * laneGap;
+          const dy = Math.min(fontSize * 0.4, 0.175 * laneGap);
           const y0 = rising ? ny + dy : ny - dy;
           const y1 = rising ? ny - dy : ny + dy;
 
@@ -402,7 +416,7 @@ export class Highway {
           ctx.stroke();
         } else {
           const topY = ny - fontSize * 0.5 - 2;
-          ctx.font = '700 11px system-ui, -apple-system, sans-serif';
+          ctx.font = markFont;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'middle';
 
@@ -410,8 +424,8 @@ export class Highway {
             const x0 = xForTime(prevT);
             const x1 = ex;
             const cpX = (x0 + x1) / 2;
-            const cpY = topY - 16;
-            const peakY = topY - 8;
+            const cpY = topY - 16 * markScale;
+            const peakY = topY - 8 * markScale;
 
             ctx.beginPath();
             ctx.moveTo(x0, topY);
@@ -420,7 +434,7 @@ export class Highway {
 
             const techW = ctx.measureText(n.tech).width;
             ctx.fillStyle = t.bg;
-            ctx.fillRect(cpX - techW / 2 - 2, peakY - 6, techW + 4, 12);
+            ctx.fillRect(cpX - techW / 2 - 2, peakY - 6 * markScale, techW + 4, 12 * markScale);
             ctx.fillStyle = t.techMark;
             ctx.fillText(n.tech, cpX, peakY);
           } else {
@@ -493,7 +507,7 @@ export class Highway {
         // Technique marks (#d6d6d6, 1.5px)
         ctx.strokeStyle = t.techMark;
         ctx.fillStyle = t.techMark;
-        ctx.lineWidth = 1.5;
+        ctx.lineWidth = 1.5 * markScale;
         ctx.lineCap = 'round';
 
         if (n.tech === 'harm' || n.harmonic) {
@@ -508,42 +522,91 @@ export class Highway {
           ctx.stroke();
         }
 
-        if (n.bend || n.tech === 'bend') {
-          const startX = ex + textW / 2 + 2;
-          const startY = ny + 2;
-          const endX = startX + 8;
-          const endY = ny - fontSize * 0.5 - 5;
+        // Slide into the note from nowhere (left side) / off the note to nowhere (right side)
+        const slideDy = Math.min(fontSize * 0.35, 0.175 * laneGap + 1);
+        if (n.slideIn) {
+          const x1 = ex - textW / 2 - 3;
+          const up = n.slideIn === 'below';
           ctx.beginPath();
-          ctx.moveTo(startX, startY);
-          ctx.quadraticCurveTo(endX, startY, endX, endY);
+          ctx.moveTo(x1 - 15 * markScale, up ? ny + slideDy : ny - slideDy);
+          ctx.lineTo(x1, up ? ny - slideDy : ny + slideDy);
           ctx.stroke();
+        }
+        if (n.slideOut) {
+          const x0 = ex + textW / 2 + 3;
+          const up = n.slideOut === 'up';
+          const x1 = x0 + 15 * markScale;
+          const y1 = up ? ny - slideDy : ny + slideDy;
+          ctx.beginPath();
+          ctx.moveTo(x0, up ? ny + slideDy : ny - slideDy);
+          ctx.lineTo(x1, y1);
+          ctx.stroke();
+          this._arrowHead(ctx, x1, y1, Math.atan2(y1 - (up ? ny + slideDy : ny - slideDy), 15 * markScale), 4 * markScale);
+        }
 
+        const bendSemis = this._bendSemis(n);
+        let bendPeakX = null;
+        let bendPeakY = null;
+        if (bendSemis > 0) {
+          // Curved arrow up to the bend amount ("½", "full", "1½"); a pre-bend is a straight arrow up;
+          // a release adds a curve back down to the string with a down arrow.
+          const x0 = ex + textW / 2 + 2;
+          const peakY = ny - fontSize * 0.5 - 8 * markScale;
+          const peakX = n.prebend ? x0 + 4 * markScale : x0 + 11 * markScale;
           ctx.beginPath();
-          ctx.moveTo(endX - 3, endY + 4);
-          ctx.lineTo(endX, endY);
-          ctx.lineTo(endX + 3, endY + 4);
+          if (n.prebend) {
+            ctx.moveTo(peakX, ny + 2);
+            ctx.lineTo(peakX, peakY);
+          } else {
+            ctx.moveTo(x0, ny + 1);
+            ctx.quadraticCurveTo(peakX, ny + 1, peakX, peakY);
+          }
           ctx.stroke();
+          this._arrowHead(ctx, peakX, peakY, -Math.PI / 2, 4 * markScale);
+
+          if (n.release) {
+            const relX = peakX + 13 * markScale;
+            const relY = ny - 1;
+            ctx.save();
+            ctx.setLineDash([3, 2]);
+            ctx.beginPath();
+            ctx.moveTo(peakX, peakY);
+            ctx.quadraticCurveTo(relX, peakY, relX, relY);
+            ctx.stroke();
+            ctx.restore();
+            this._arrowHead(ctx, relX, relY, Math.PI / 2, 4 * markScale);
+          }
 
           const bendText = this._bendLabel(n);
-          ctx.font = '700 10px system-ui, -apple-system, sans-serif';
+          ctx.font = markFont;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
-          ctx.fillText(bendText, endX, endY - 1);
-        } else if (n.tech === 'vib' || n.vibrato) {
-          const vw = 18;
-          const vy = ny - fontSize * 0.5 - 5;
-          const amp = 2;
+          const lw = ctx.measureText(bendText).width;
+          ctx.fillStyle = t.bg;
+          ctx.fillRect(peakX - lw / 2 - 2, peakY - 3 - 11 * markScale, lw + 4, 11 * markScale + 1);
+          ctx.fillStyle = t.techMark;
+          ctx.fillText(bendText, peakX, peakY - 2);
+          bendPeakX = peakX;
+          bendPeakY = peakY;
+        }
+
+        if (n.tech === 'vib' || n.vibrato) {
+          // Beside the bend label when there is one, else centred above the note
+          const vw = (bendPeakX !== null ? 14 : 18) * markScale;
+          const vx = bendPeakX !== null ? bendPeakX + (n.release ? 22 : 8) * markScale : ex - vw / 2;
+          const vy = bendPeakX !== null ? bendPeakY + 2 : ny - fontSize * 0.5 - 5;
+          const amp = 2 * markScale;
           ctx.beginPath();
           for (let i = 0; i <= 24; i++) {
             const u = i / 24;
-            const px = ex - vw / 2 + u * vw;
+            const px = vx + u * vw;
             const py = vy - Math.sin(u * Math.PI * 6) * amp;
             if (i === 0) ctx.moveTo(px, py);
             else ctx.lineTo(px, py);
           }
           ctx.stroke();
-        } else if (n.tech === 'pm' || n.palmMute) {
-          ctx.font = '700 10px system-ui, -apple-system, sans-serif';
+        } else if (bendSemis <= 0 && (n.tech === 'pm' || n.palmMute)) {
+          ctx.font = markFont;
           ctx.textAlign = 'center';
           ctx.textBaseline = 'bottom';
           ctx.fillText('P.M.', ex, ny - fontSize * 0.5 - 3);
@@ -646,13 +709,30 @@ export class Highway {
     return best;
   }
 
+  /** Bend size in semitones (n.bend), or a whole step for a bare 'bend' mark. */
+  _bendSemis(n) {
+    const b = Number(n.bend);
+    if (Number.isFinite(b) && b > 0) return b;
+    if (n.bend === 'full' || n.bend === '1/2' || n.bend === '½') return n.bend === 'full' ? 2 : 1;
+    return n.tech === 'bend' ? 2 : 0;
+  }
+
+  /** Bend amount in whole steps, the way tab writes it: "¼", "½", "full", "1½", "2". */
   _bendLabel(n) {
-    const b = n.bend;
-    if (b === 2 || b === 'full') return 'full';
-    if (b === 1 || b === 0.5 || b === '1/2' || b === '½') return '½';
-    if (typeof b === 'number' && Number.isFinite(b) && b > 0) return `b+${b}`;
-    if (typeof b === 'string' && b.trim()) return b.trim();
-    return 'full';
+    const steps = Math.round(this._bendSemis(n) * 2) / 4; // nearest quarter step
+    if (steps <= 0) return 'full';
+    if (steps === 1) return 'full';
+    const whole = Math.floor(steps);
+    const frac = { 0.25: '¼', 0.5: '½', 0.75: '¾' }[steps - whole] || '';
+    return `${whole > 0 ? whole : ''}${frac}` || 'full';
+  }
+
+  _arrowHead(ctx, x, y, angle, size) {
+    ctx.beginPath();
+    ctx.moveTo(x + Math.cos(angle + 2.5) * size, y + Math.sin(angle + 2.5) * size);
+    ctx.lineTo(x, y);
+    ctx.lineTo(x + Math.cos(angle - 2.5) * size, y + Math.sin(angle - 2.5) * size);
+    ctx.stroke();
   }
 
   _roundRect(ctx, x, y, w, h, r) {
@@ -673,6 +753,9 @@ export class Highway {
     }
     if (typeof window !== 'undefined' && this._onWindowResize) {
       window.removeEventListener('resize', this._onWindowResize);
+    }
+    if (typeof window !== 'undefined' && this._onTheme) {
+      window.removeEventListener('woodshed:theme-changed', this._onTheme);
     }
     this.canvas.removeEventListener('pointerdown', this._onPointerDown);
     window.removeEventListener('pointermove', this._onPointerMove);

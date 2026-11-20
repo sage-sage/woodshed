@@ -31,6 +31,8 @@ constexpr UINT kCmdStartWithWindows = 3014;
 constexpr UINT kCmdQuit = 3015;
 constexpr UINT kCmdUpdateNow = 3016;
 constexpr UINT kCmdCheckUpdates = 3017;
+constexpr UINT kCmdRescanDevices = 3018;
+constexpr WPARAM kDbtDevNodesChanged = 0x0007;  // DBT_DEVNODES_CHANGED (dbt.h)
 
 constexpr UINT kUpdateFirstDelayMs = 10000;
 constexpr UINT kUpdateRepeatIntervalMs = 6u * 60u * 60u * 1000u;
@@ -140,6 +142,7 @@ void TrayApp::destroy() {
         KillTimer(hwnd_, kTimerTooltip);
         KillTimer(hwnd_, kTimerUpdateFirst);
         KillTimer(hwnd_, kTimerUpdateRepeat);
+        KillTimer(hwnd_, kTimerDeviceRescan);
         removeTrayIcon();
         DestroyWindow(hwnd_);
         hwnd_ = nullptr;
@@ -379,6 +382,7 @@ void TrayApp::showContextMenu() {
     AppendMenuW(hMenu, MF_STRING | (snap.mute ? MF_CHECKED : MF_UNCHECKED), kCmdMute, L"Mute");
     AppendMenuW(hMenu, MF_SEPARATOR, 0, nullptr);
     AppendMenuW(hMenu, MF_STRING, kCmdAsioPanel, L"ASIO control panel...");
+    AppendMenuW(hMenu, MF_STRING, kCmdRescanDevices, L"Rescan audio devices");
     AppendMenuW(hMenu, MF_STRING, kCmdCheckUpdates, L"Check for updates");
     AppendMenuW(hMenu, MF_STRING, kCmdOpenWoodshed, L"Open Woodshed");
     AppendMenuW(hMenu, MF_STRING | (snap.startWithWindows ? MF_CHECKED : MF_UNCHECKED),
@@ -418,6 +422,8 @@ void TrayApp::showContextMenu() {
         controller_.enqueueToggleMute();
     } else if (chosen == kCmdAsioPanel) {
         controller_.enqueueOpenAsioPanel();
+    } else if (chosen == kCmdRescanDevices) {
+        controller_.enqueueRescanDevices(true);
     } else if (chosen == kCmdCheckUpdates) {
         manualCheckPending_ = true;
         updater_.checkAsync(hwnd_, true);
@@ -492,8 +498,20 @@ LRESULT TrayApp::handleMessage(UINT msg, WPARAM wParam, LPARAM lParam) {
                 updater_.checkAsync(hwnd_, false);
             } else if (wParam == kTimerUpdateRepeat) {
                 updater_.checkAsync(hwnd_, false);
+            } else if (wParam == kTimerDeviceRescan) {
+                KillTimer(hwnd_, kTimerDeviceRescan);
+                controller_.enqueueRescanDevices(false);
             }
             return 0;
+        }
+
+        case WM_DEVICECHANGE: {
+            // Windows sends a burst of these while an interface (and its driver) comes up: wait until it has
+            // been quiet for 1.5 s, then let the controller re-list devices (only if no stream is running).
+            if (wParam == kDbtDevNodesChanged) {
+                SetTimer(hwnd_, kTimerDeviceRescan, kDeviceRescanDelayMs, nullptr);
+            }
+            return TRUE;
         }
 
         case kMsgUpdateAvailable: {

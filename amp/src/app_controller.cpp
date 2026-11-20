@@ -3,6 +3,7 @@
 #include <commdlg.h>
 
 #include "app_controller.h"
+#include "device_policy.h"
 
 #include <algorithm>
 #include <chrono>
@@ -383,7 +384,8 @@ bool AppController::start() {
     }
 
     const AudioStatus initSt = audioEngine_.getStatus();
-    if (audioOk && !initSt.device.empty() && settings_.device != initSt.device) {
+    // A fallback device (the saved one is unplugged) must not replace the player's choice.
+    if (audioOk && !initSt.device.empty() && settings_.device.empty()) {
         settings_.device = initSt.device;
         saveSettingsAtomic();
     }
@@ -467,6 +469,17 @@ void AppController::enqueueToggleMute() {
         std::lock_guard<std::mutex> lock(cmdMutex_);
         Command cmd;
         cmd.type = CmdType::ToggleMute;
+        cmdQueue_.push_back(std::move(cmd));
+    }
+    cmdCv_.notify_one();
+}
+
+void AppController::enqueueRescanDevices(bool force) {
+    {
+        std::lock_guard<std::mutex> lock(cmdMutex_);
+        Command cmd;
+        cmd.type = CmdType::RescanDevices;
+        cmd.boolVal = force;
         cmdQueue_.push_back(std::move(cmd));
     }
     cmdCv_.notify_one();
@@ -772,7 +785,7 @@ void AppController::controllerLoop() {
                 refreshTraySnapshot(st);
                 if (ok) {
                     lastNotifiedError_.clear();
-                    if (!st.device.empty() && settings_.device != st.device) {
+                    if (!st.device.empty() && settings_.device.empty()) {  // keep the player's choice over a fallback
                         settings_.device = st.device;
                         saveSettingsAtomic();
                     }
@@ -851,6 +864,33 @@ void AppController::handleCommand(const Command& cmd) {
             syncStartupRegistry(cmd.boolVal);
             saveSettingsAtomic();
             refreshTraySnapshot(audioEngine_.getStatus());
+            break;
+        }
+
+        case CmdType::RescanDevices: {
+            // A device appeared or went away. A running stream is left alone unless asked (a rescan has to stop
+            // it); otherwise re-list devices and open the saved interface if it is there now.
+            if (!cmd.boolVal) {
+                const AudioStatus cur = audioEngine_.getStatus();
+                if (!shouldRescanOnDeviceChange(cur.running, cur.device, settings_.device, audioEngine_.streamAlive())) break;
+            }
+            audioEngine_.rescanDevices();
+            const bool ok = audioEngine_.restart(settings_.device, settings_.inputChannel, settings_.sampleRate, settings_.bufferFrames);
+            AudioStatus st = audioEngine_.getStatus();
+            if (ok) {
+                lastNotifiedError_.clear();
+                if (!st.device.empty() && settings_.device.empty()) {  // keep the player's choice over a fallback
+                    settings_.device = st.device;
+                    saveSettingsAtomic();
+                }
+                if (const Preset* p = presetBank_.findById(currentPresetId_)) {
+                    buildAndInstallBoard(*p, true);
+                }
+                st = audioEngine_.getStatus();
+            }
+            refreshTraySnapshot(st);
+            wsServer_.broadcastText(buildDevicesJson());
+            wsServer_.broadcastText(buildStatusJson(st));
             break;
         }
 
@@ -955,6 +995,13 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
         const Preset* p = presetBank_.findById(id);
         if (!p) {
             wsServer_.sendTextToClient(clientId, buildErrorJson("Unknown preset id: " + id));
+            return;
+        }
+        // Already playing this preset: nothing to do. Rebuilding would reload every model and IR and swap in
+        // fresh blocks (a click), and answering would make a page that re-applies its tone on every presets
+        // message (Woodshed 2.5.3's play screen) send it again: a loop of hundreds of reloads a second,
+        // heard as static.
+        if (p->id == currentPresetId_ && audioEngine_.chain().board()) {
             return;
         }
         currentPresetId_ = p->id;
@@ -2125,6 +2172,11 @@ void AppController::handleWsJson(uint32_t clientId, const std::string& text) {
         return;
     }
 
+    if (type == "rescanDevices") {
+        enqueueRescanDevices(true);
+        return;
+    }
+
     if (type == "asioPanel") {
         if (!audioEngine_.openAsioControlPanel(mainHwnd_.load(std::memory_order_relaxed))) {
             wsServer_.sendTextToClient(clientId, buildErrorJson("Unable to open ASIO control panel"));
@@ -2142,7 +2194,7 @@ std::string AppController::buildHelloJson() const {
         {"app", "woodshed-amp"},
         {"version", kAmpVersion},
         {"protocol", 1},
-        {"features", json::array({"board", "graph", "customPresets", "guide"})}
+        {"features", json::array({"board", "graph", "customPresets", "guide", "rescan"})}
     };
     return j.dump();
 }
@@ -2360,6 +2412,7 @@ std::string AppController::buildStatusJson(const AudioStatus& st) const {
         {"clip", st.clip},
         {"cpu", round3(st.cpu)},
         {"xruns", st.xruns},
+        {"rescans", audioEngine_.rescanCount()},
         {"bypass", st.bypass},
         {"mute", st.mute},
         {"preset", currentPresetId_},
